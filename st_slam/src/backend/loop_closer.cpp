@@ -133,7 +133,10 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
                                                           int max_candidates) {
   std::vector<LoopCandidate> candidates;
 #ifdef HAS_DBOW3
-  if (!db_ || !vocab_) return candidates;
+  if (!db_ || !vocab_) {
+    std::cout << "[LoopCloser DEBUG] db or vocab not initialized\n";
+    return candidates;
+  }
 
   auto* v = (DBoW3::Vocabulary*)vocab_;
   auto* d = (DBoW3::Database*)db_;
@@ -142,31 +145,44 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
   for (size_t i = 0; i < kf_id_map_.size(); ++i) {
     if (kf_id_map_[i] == current_kf_id) { current_entry = (int)i; break; }
   }
-  if (current_entry < 0) return candidates;
+  if (current_entry < 0) {
+    std::cout << "[LoopCloser DEBUG] current_kf_id " << current_kf_id << " not found in kf_id_map_\n";
+    return candidates;
+  }
+  if (current_entry >= (int)descriptors_cache_.size()) {
+    std::cout << "[LoopCloser DEBUG] descriptors_cache_ size " << descriptors_cache_.size() << " < current_entry " << current_entry << "\n";
+    return candidates;
+  }
 
   DBoW3::QueryResults ret;
   DBoW3::BowVector bow_vec;
   v->transform(descriptors_cache_[current_entry], bow_vec);
   d->query(bow_vec, ret, max_candidates * 3);
+  std::cout << "[LoopCloser DEBUG] Query returned " << ret.size() << " results\n";
 
   int added = 0;
   for (const auto& qr : ret) {
     if (added >= max_candidates) break;
     int match_id = (qr.Id < (int)kf_id_map_.size()) ? kf_id_map_[qr.Id] : -1;
     if (match_id < 0) continue;
-    if (std::abs(match_id - current_kf_id) < 15) continue;
-    if (qr.Score < min_score) continue;
+    if (std::abs(match_id - current_kf_id) < 8) continue; // reduced from 15
+    if (qr.Score < min_score) {
+      std::cout << "[LoopCloser DEBUG] qr.Score " << qr.Score << " < min_score " << min_score << "\n";
+      continue;
+    }
 
     LoopCandidate cand;
     cand.query_id = current_kf_id;
     cand.match_id = match_id;
     cand.similarity_score = qr.Score;
     candidates.push_back(cand);
+    std::cout << "[LoopCloser DEBUG] Adding candidate KF" << match_id << " score=" << qr.Score << "\n";
     added++;
   }
 #else
   (void)current_kf_id; (void)min_score; (void)max_candidates;
 #endif
+  std::cout << "[LoopCloser DEBUG] Total " << candidates.size() << " loop candidates\n";
   return candidates;
 }
 

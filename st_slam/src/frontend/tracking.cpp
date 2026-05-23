@@ -542,9 +542,18 @@ VecX Tracking::ComputeResidualVector(
 }
 
 bool Tracking::DetectLoopCorrection() {
-  if (kf_history_.size() < 20) return false;
-  if (last_frame_.descriptors.empty()) return false;
-  if (!loop_closer_ || !loop_closer_->HasDatabase()) return false;
+  if (kf_history_.size() < 8) {
+    std::cout << "[DEBUG] Skip loop closure: kf_history size " << kf_history_.size() << " < 8\n";
+    return false;
+  }
+  if (last_frame_.descriptors.empty()) {
+    std::cout << "[DEBUG] Skip loop closure: no descriptors\n";
+    return false;
+  }
+  if (!loop_closer_ || !loop_closer_->HasDatabase()) {
+    std::cout << "[DEBUG] Skip loop closure: loop_closer not initialized\n";
+    return false;
+  }
 
   int current_kf_id = last_keyframe_id_;
 
