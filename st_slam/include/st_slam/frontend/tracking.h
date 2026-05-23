@@ -12,6 +12,7 @@
 #include "st_slam/backend/pose_graph.h"
 #include "st_slam/frontend/pnp_solver.h"
 #include "st_slam/frontend/local_map.h"
+#include "st_slam/backend/loop_closer.h"
 #include <memory>
 
 namespace st_slam {
@@ -34,6 +35,8 @@ public:
   Frame& GetReferenceFrame() { return ref_frame_; }
 
   LocalMap& GetLocalMap() { return *local_map_; }
+  
+  int GetNumLoopsDetected() const { return num_loops_detected_; }
 
 private:
   STSLAMConfig config_;
@@ -54,11 +57,13 @@ private:
   std::unique_ptr<PnPSolver> pnp_solver_;
   std::unique_ptr<LocalMap> local_map_;
   std::unique_ptr<PoseGraph> pose_graph_;
+  std::unique_ptr<LoopCloser> loop_closer_;
 
   std::vector<Vec3> imu_accel_buffer_;
   std::vector<Vec3> imu_gyro_buffer_;
 
   int last_keyframe_id_ = -1;
+  int num_loops_detected_ = 0;
   int last_near_kf_id_ = -1;
   double last_imu_timestamp_ = 0;
   Vec3 last_velocity_ = Vec3::Zero();

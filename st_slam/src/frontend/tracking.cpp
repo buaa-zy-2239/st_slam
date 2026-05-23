@@ -14,7 +14,8 @@ namespace st_slam {
 Tracking::Tracking(const STSLAMConfig& config)
   : config_(config),
     state_(TrackingState::INITIALIZING),
-    frame_counter_(0) {
+    frame_counter_(0),
+    num_loops_detected_(0) {
 
   orb_extractor_ = std::make_unique<ORBExtractor>(1500, 1.2f, 8, 20, 7);
   frame_handler_ = std::make_unique<FrameHandler>(
@@ -33,6 +34,15 @@ Tracking::Tracking(const STSLAMConfig& config)
     525.0, 525.0, 319.5, 239.5, 3.0, 12, 300);
   local_map_ = std::make_unique<LocalMap>(20, 40);
   pose_graph_ = std::make_unique<PoseGraph>(100.0, 1000.0);
+  
+  if (config.use_loop_closure) {
+    loop_closer_ = std::make_unique<LoopCloser>(config.vocab_path, 525.0, 525.0, 319.5, 239.5);
+    if (!config.vocab_path.empty()) {
+      std::cout << "[Tracking] LoopCloser initialized with vocab: " << config.vocab_path << std::endl;
+    } else {
+      std::cout << "[Tracking] LoopCloser initialized (no vocab, will build online)" << std::endl;
+    }
+  }
 
   current_pose_ = SE3::Identity();
   last_pose_ = SE3::Identity();
@@ -177,6 +187,9 @@ bool Tracking::TryCreateKeyFrame(Frame& frame) {
     skf.timestamp = frame.timestamp;
     kf_history_.push_back(skf);
     if (kf_history_.size() > 500) kf_history_.pop_front();
+    
+    // Add KF to LoopCloser database
+    loop_closer_->AddKeyFrame(kf_id, frame.descriptors);
 
     return true;
   }
@@ -531,60 +544,68 @@ VecX Tracking::ComputeResidualVector(
 bool Tracking::DetectLoopCorrection() {
   if (kf_history_.size() < 20) return false;
   if (last_frame_.descriptors.empty()) return false;
+  if (!loop_closer_ || !loop_closer_->HasDatabase()) return false;
 
   int current_kf_id = last_keyframe_id_;
 
-  // Efficient descriptor matching: check every 5th past KF
+  // Step 1: Use LoopCloser for BoW-based loop candidate detection
+  auto candidates = loop_closer_->DetectCandidates(current_kf_id, 0.05f, 3);
+  if (candidates.empty()) return false;
+
+  // Step 2: Geometric verification on top candidates
   int best_score = 0;
   int best_kf_id = -1;
-  int candidates = 0;
-
-  for (const auto& skf : kf_history_) {
-    if (current_kf_id - skf.id < 15) continue;
-    if (skf.id % 5 != 0) continue;
-    if (skf.descriptors.empty()) continue;
-    candidates++;
-
-    cv::BFMatcher matcher(cv::NORM_HAMMING, false);
-    std::vector<std::vector<cv::DMatch>> knn;
-    matcher.knnMatch(last_frame_.descriptors, skf.descriptors, knn, 2);
-
-    int good = 0;
-    for (size_t i = 0; i < knn.size(); ++i) {
-      if (knn[i].size() >= 2 &&
-          knn[i][0].distance < 0.75f * knn[i][1].distance) {
-        good++;
+  SE3 best_loop_pose;
+  
+  for (const auto& cand : candidates) {
+    SE3 loop_pose;
+    // Get the past KF from local_map_
+    const auto* past_kf = local_map_->GetKeyFrame(cand.match_id);
+    if (!past_kf) continue;
+    
+    Frame pseudo_frame;
+    pseudo_frame.keypoints = past_kf->keypoints;
+    pseudo_frame.descriptors = past_kf->descriptors.clone();
+    pseudo_frame.keypoints_3d.resize(pseudo_frame.keypoints.size(), Vec3::Zero());
+    
+    for (size_t i = 0; i < past_kf->map_points.size() && i < pseudo_frame.keypoints.size(); ++i) {
+      int mp_id = past_kf->map_points[i];
+      auto* mp = local_map_->GetMapPoint(mp_id);
+      if (mp) {
+        pseudo_frame.keypoints_3d[i] = mp->position;
       }
     }
-    if (good > best_score) {
-      best_score = good;
-      best_kf_id = skf.id;
+    
+    if (loop_closer_->GeometricVerification(current_kf_id, cand.match_id, last_frame_, pseudo_frame, loop_pose)) {
+      // Check if it's a good loop
+      SE3 drift = current_pose_.inverse() * loop_pose;
+      double drift_dist = drift.trans.norm();
+      AngleAxis drift_aa(drift.rot);
+      double drift_deg = drift_aa.angle() * 180.0 / M_PI;
+      
+      if (drift_dist > 0.005 && drift_dist < 0.8 && drift_deg < 25) {
+        best_kf_id = cand.match_id;
+        best_loop_pose = loop_pose;
+        break;
+      }
     }
   }
 
-  if (best_score < 20 || best_kf_id < 0) return false;
-
-  // Geometric verification via PnP
-  SE3 loop_pose;
-  if (!MatchWithPastKeyFrame(best_kf_id, last_frame_, loop_pose))
-    return false;
+  if (best_kf_id < 0) return false;
 
   // Add loop constraint to pose graph
-  SE3 drift = current_pose_.inverse() * loop_pose;
-  double drift_dist = drift.trans.norm();
-  AngleAxis drift_aa(drift.rot);
-  double drift_deg = drift_aa.angle() * 180.0 / M_PI;
-
-  if (drift_dist < 0.005 || drift_dist > 0.8 || drift_deg > 25)
-    return false;
-
-  SE3 rel_loop = current_pose_.inverse() * loop_pose;
+  SE3 rel_loop = current_pose_.inverse() * best_loop_pose;
   Mat6 info = PoseGraph::DefaultInformation(50.0, 500.0);
   pose_graph_->AddEdge(best_kf_id, current_kf_id, rel_loop, info);
 
+  num_loops_detected_++;
+  SE3 drift = current_pose_.inverse() * best_loop_pose;
+  double drift_dist = drift.trans.norm();
+  AngleAxis drift_aa(drift.rot);
+  double drift_deg = drift_aa.angle() * 180.0 / M_PI;
+  
   std::cout << "\n  [LOOP_CLOSED] KF" << best_kf_id << "→KF" << current_kf_id
-            << " drift=" << (drift_dist*100) << "cm " << drift_deg << "deg"
-            << " matches=" << best_score << "/" << candidates << "\n";
+            << " drift=" << (drift_dist*100) << "cm " << drift_deg << "deg\n";
   return true;
 }
 

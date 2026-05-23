@@ -5,19 +5,27 @@
 #include <vector>
 
 #ifdef HAS_DBOW3
+// Try both include styles - DBoW3.h may be in DBoW3/ subdir or directly in include path
+#ifdef __has_include
+#if __has_include(<DBoW3/DBoW3.h>)
+#include <DBoW3/DBoW3.h>
+#elif __has_include(<DBoW3.h>)
 #include <DBoW3.h>
+#else
+#error "DBoW3 headers not found!"
+#endif
+#else
+// Fallback - try both paths
+#include <DBoW3/DBoW3.h>
+#endif
 #else
 // Stub implementation when DBoW3 is not available
 namespace DBoW3 {
   struct QueryResult {
-    int Id;
-    float Score;
+    unsigned int Id;
+    double Score;
   };
-  struct QueryResults {
-    std::vector<QueryResult> vec;
-    const QueryResult* begin() const { return vec.data(); }
-    const QueryResult* end() const { return vec.data() + vec.size(); }
-    size_t size() const { return vec.size(); }
+  struct QueryResults : public std::vector<QueryResult> {
   };
   class Vocabulary {
   public:
@@ -30,9 +38,12 @@ namespace DBoW3 {
   using EntryId = unsigned int;
   class Database {
   public:
+    Database() = default;
+    Database(const Vocabulary&, bool, int) {}
     void setVocabulary(const Vocabulary&) {}
     EntryId add(const cv::Mat&) { return 0; }
-    void query(int, QueryResults&, int) const {}
+    void query(const cv::Mat&, QueryResults&, int, int) const {}
+    void query(EntryId, QueryResults&, int) const {}
   };
 }
 #endif
@@ -67,7 +78,7 @@ bool LoopCloser::LoadVocabulary(const std::string& vocab_path) {
     auto* v = (DBoW3::Vocabulary*)vocab_;
     auto* d = (DBoW3::Database*)db_;
     v->load(vocab_path);
-    d->setVocabulary(*v);
+    d->setVocabulary(*v, true, 0);
     std::cout << "[LoopCloser] Loaded vocabulary from " << vocab_path
               << " (" << v->size() << " words)" << std::endl;
     return true;
@@ -141,9 +152,9 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
     if (qr.Score < min_score) continue;
 
     LoopCandidate cand;
-    cand.query_kf_id = current_kf_id;
-    cand.match_kf_id = match_id;
-    cand.score = qr.Score;
+    cand.query_id = current_kf_id;
+    cand.match_id = match_id;
+    cand.similarity_score = qr.Score;
     candidates.push_back(cand);
     added++;
   }

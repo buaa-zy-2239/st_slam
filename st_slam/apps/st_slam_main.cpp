@@ -242,7 +242,6 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
   std::vector<double> tracking_times;
   std::vector<TrackingReport> tracking_reports;
   int lost_count = 0;
-  int loop_count = 0;
 
   auto bench_start = std::chrono::steady_clock::now();
 
@@ -274,6 +273,8 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
     else if (report.degeneracy == DegeneracyState::PARTIAL) std::cout << " [deg]";
     std::cout << std::flush;
   }
+  
+  int loop_count = tracking.GetNumLoopsDetected();
 
   auto bench_end = std::chrono::steady_clock::now();
   double total_wall_time_s = std::chrono::duration<double>(bench_end - bench_start).count();

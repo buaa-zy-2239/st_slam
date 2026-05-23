@@ -80,6 +80,10 @@ struct STSLAMConfig {
   int start_frame = 0;
   int max_frames = -1;
 
+  // === Loop Closure ===
+  std::string vocab_path;
+  bool use_loop_closure = true;
+
   static STSLAMConfig& Instance() {
     static STSLAMConfig config;
     return config;

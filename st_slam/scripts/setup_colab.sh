@@ -55,17 +55,29 @@ if [ ! -f "$SP_DIR/superpoint_v1.pth" ]; then
     echo "WARNING: Could not download pretrained weights. Using demo mode."
 fi
 
-# 5. Build ST-SLAM
-echo "[5/6] Building ST-SLAM..."
+# 5. Download ORB vocabulary (for loop closure)
+echo "[5/7] Downloading ORB vocabulary..."
+mkdir -p "$PROJ_DIR/data"
+if [ ! -f "$PROJ_DIR/data/ORBvoc.txt.tar.gz" ]; then
+    wget -q https://github.com/raulmur/ORB_SLAM2/raw/master/Vocabulary/ORBvoc.txt.tar.gz \
+        -O "$PROJ_DIR/data/ORBvoc.txt.tar.gz"
+    cd "$PROJ_DIR/data"
+    tar xzf ORBvoc.txt.tar.gz || true
+    cd "$PROJ_DIR"
+fi
+
+# 6. Build ST-SLAM with DBoW3 enabled
+echo "[6/7] Building ST-SLAM with loop closure..."
 cd "$PROJ_DIR"
 rm -rf build
 mkdir -p build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_PREFIX_PATH=/usr/local
-make -j$(nproc) 2>&1 | tail -5
+    -DCMAKE_PREFIX_PATH=/usr/local \
+    -DUSE_DBOW3=ON
+make -j$(nproc) 2>&1
 
-# 6. Download TUM dataset if available
-echo "[6/6] Checking TUM sequence..."
+# 7. Download TUM dataset if available
+echo "[7/7] Checking TUM sequence..."
 if [ ! -d "$PROJ_DIR/../datasets/tum/rgbd_dataset_freiburg1_xyz" ]; then
     echo "No local TUM dataset found."
     echo "To download:"
