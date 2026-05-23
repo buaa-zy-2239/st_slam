@@ -300,27 +300,26 @@ TrackingReport Tracking::TrackFrameWithPnP(Frame& frame) {
         // Step 2: Detect loop via descriptor matching
         DetectLoopCorrection();
 
-        // Step 3: Only run full PGO every 5 keyframes
-        if (local_map_->NumKeyFrames() % 5 == 0) {
-          if (pose_graph_->NumEdges() > 3) {
-            // Save keyframe pose BEFORE optimization
-            auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
-            SE3 kf_before_opt;
-            if (opt_kf) kf_before_opt = opt_kf->pose;
+        // Step 3: Run PGO on every keyframe after the first 5
+        // (Removed % 5 == 0 requirement so PGO runs with 7 keyframes!)
+        if (local_map_->NumKeyFrames() > 5 && pose_graph_->NumEdges() > 3) {
+          // Save keyframe pose BEFORE optimization
+          auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
+          SE3 kf_before_opt;
+          if (opt_kf) kf_before_opt = opt_kf->pose;
 
-            pose_graph_->Optimize(local_map_->GetAllKeyframes());
+          pose_graph_->Optimize(local_map_->GetAllKeyframes());
 
-            // Propagate corrected pose to current frame
-            if (opt_kf) {
-              SE3 kf_after_opt = opt_kf->pose;
-              // Compute correction from keyframe pose change
-              SE3 correction = kf_before_opt.inverse() * kf_after_opt;
-              // Apply correction to current pose
-              current_pose_ = correction * current_pose_;
-              last_pose_ = correction * last_pose_;
-              std::cout << "[PGO] Applied correction: trans=" << correction.trans.norm()
-                        << "m rot=" << (2*acos(std::abs(correction.rot.w()))) * 180/3.14159 << "deg\n";
-            }
+          // Propagate corrected pose to current frame
+          if (opt_kf) {
+            SE3 kf_after_opt = opt_kf->pose;
+            // Compute correction from keyframe pose change
+            SE3 correction = kf_before_opt.inverse() * kf_after_opt;
+            // Apply correction to current pose
+            current_pose_ = correction * current_pose_;
+            last_pose_ = correction * last_pose_;
+            std::cout << "[PGO] Applied correction: trans=" << correction.trans.norm()
+                      << "m rot=" << (2*acos(std::abs(correction.rot.w()))) * 180/3.14159 << "deg\n";
           }
         }
       }
@@ -389,27 +388,26 @@ TrackingReport Tracking::TrackWithLocalMap(Frame& frame) {
         DetectLoopCorrection();
         pose_graph_->BuildFromKeyframes(local_map_->GetAllKeyframes());
         
-        // Only run full PGO every 5 keyframes
-        if (local_map_->NumKeyFrames() % 5 == 0) {
-          if (pose_graph_->NumEdges() > 3) {
-            // Save keyframe pose BEFORE optimization
-            auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
-            SE3 kf_before_opt;
-            if (opt_kf) kf_before_opt = opt_kf->pose;
+        // Run PGO on every keyframe after the first 5
+        // (Removed % 5 == 0 requirement so PGO runs with 7 keyframes!)
+        if (local_map_->NumKeyFrames() > 5 && pose_graph_->NumEdges() > 3) {
+          // Save keyframe pose BEFORE optimization
+          auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
+          SE3 kf_before_opt;
+          if (opt_kf) kf_before_opt = opt_kf->pose;
 
-            pose_graph_->Optimize(local_map_->GetAllKeyframes());
+          pose_graph_->Optimize(local_map_->GetAllKeyframes());
 
-            // Propagate corrected pose to current frame
-            if (opt_kf) {
-              SE3 kf_after_opt = opt_kf->pose;
-              // Compute correction from keyframe pose change
-              SE3 correction = kf_before_opt.inverse() * kf_after_opt;
-              // Apply correction to current pose
-              current_pose_ = correction * current_pose_;
-              last_pose_ = correction * last_pose_;
-              std::cout << "[PGO] Applied correction: trans=" << correction.trans.norm()
-                        << "m rot=" << (2*acos(std::abs(correction.rot.w()))) * 180/3.14159 << "deg\n";
-            }
+          // Propagate corrected pose to current frame
+          if (opt_kf) {
+            SE3 kf_after_opt = opt_kf->pose;
+            // Compute correction from keyframe pose change
+            SE3 correction = kf_before_opt.inverse() * kf_after_opt;
+            // Apply correction to current pose
+            current_pose_ = correction * current_pose_;
+            last_pose_ = correction * last_pose_;
+            std::cout << "[PGO] Applied correction: trans=" << correction.trans.norm()
+                      << "m rot=" << (2*acos(std::abs(correction.rot.w()))) * 180/3.14159 << "deg\n";
           }
         }
       }
