@@ -26,6 +26,18 @@ include_directories(
 
 add_definitions(-DST_SLAM_VERSION="${PROJECT_VERSION}")
 
+# Optional: DBoW3 for loop closure
+find_package(DBoW3 QUIET)
+if(DBoW3_FOUND)
+  message(STATUS "DBoW3 found - enabling loop closure")
+  add_definitions(-DHAS_DBOW3)
+  include_directories(${DBoW3_INCLUDE_DIRS})
+  set(DBOW3_LIBS ${DBoW3_LIBRARIES})
+else()
+  message(STATUS "DBoW3 not found - loop closure disabled (install: bash scripts/setup_colab.sh)")
+  set(DBOW3_LIBS "")
+endif()
+
 file(GLOB_RECURSE ST_SLAM_SOURCES src/*.cpp)
 
 add_library(st_slam SHARED ${ST_SLAM_SOURCES})
@@ -33,6 +45,7 @@ target_link_libraries(st_slam
   ${OpenCV_LIBS}
   ${CERES_LIBRARIES}
   ${Boost_LIBRARIES}
+  ${DBOW3_LIBS}
   pthread
 )
 
