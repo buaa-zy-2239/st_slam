@@ -162,11 +162,25 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
   }
 
   DBoW3::QueryResults ret;
+  // Try both: first use BowVector, if that returns 0.0 scores, try direct descriptor query
   DBoW3::BowVector bow_vec;
   v->transform(descriptors_cache_[current_entry], bow_vec);
   std::cout << "[LoopCloser DEBUG] BowVector has " << bow_vec.size() << " words\n";
   d->query(bow_vec, ret, max_candidates * 3);
-  std::cout << "[LoopCloser DEBUG] Query returned " << ret.size() << " results\n";
+  std::cout << "[LoopCloser DEBUG] BowVector query returned " << ret.size() << " results\n";
+  
+  // If scores are 0, try direct descriptor query
+  bool try_direct = !ret.empty();
+  if (try_direct) {
+    for (const auto& qr : ret) {
+      if (qr.Score > 0.001) { try_direct = false; break; }
+    }
+  }
+  if (try_direct) {
+    std::cout << "[LoopCloser DEBUG] Trying direct descriptor query...\n";
+    d->query(descriptors_cache_[current_entry], ret, max_candidates * 3);
+    std::cout << "[LoopCloser DEBUG] Direct query returned " << ret.size() << " results\n";
+  }
 
   int added = 0;
   for (const auto& qr : ret) {

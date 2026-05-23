@@ -565,7 +565,7 @@ bool Tracking::DetectLoopCorrection() {
   int current_kf_id = last_keyframe_id_;
 
   // Step 1: Use LoopCloser for BoW-based loop candidate detection
-  auto candidates = loop_closer_->DetectCandidates(current_kf_id, 0.05f, 3);
+  auto candidates = loop_closer_->DetectCandidates(current_kf_id, 0.001f, 3); // Lowered from 0.05 to 0.001
   if (candidates.empty()) return false;
 
   // Step 2: Geometric verification on top candidates
