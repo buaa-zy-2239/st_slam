@@ -34,6 +34,7 @@ namespace DBoW3 {
     void create(const std::vector<cv::Mat>&) {}
     void save(const std::string&) const {}
     int size() const { return 0; }
+    void transform(const cv::Mat&, BowVector&) const {}
   };
   using EntryId = unsigned int;
   class Database {
@@ -120,6 +121,8 @@ int LoopCloser::AddKeyFrame(int kf_id, const cv::Mat& descriptors) {
   }
   kf_id_map_[entry_id] = kf_id;
   descriptors_cache_[entry_id] = descriptors.clone();
+  std::cout << "[LoopCloser DEBUG] Added KF" << kf_id << " as entry " << entry_id
+            << " (total " << kf_id_map_.size() << " entries)" << std::endl;
   return (int)entry_id;
 #else
   (void)kf_id;
@@ -153,10 +156,15 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
     std::cout << "[LoopCloser DEBUG] descriptors_cache_ size " << descriptors_cache_.size() << " < current_entry " << current_entry << "\n";
     return candidates;
   }
+  if (descriptors_cache_[current_entry].empty()) {
+    std::cout << "[LoopCloser DEBUG] descriptors_cache_[" << current_entry << "] is empty\n";
+    return candidates;
+  }
 
   DBoW3::QueryResults ret;
   DBoW3::BowVector bow_vec;
   v->transform(descriptors_cache_[current_entry], bow_vec);
+  std::cout << "[LoopCloser DEBUG] BowVector has " << bow_vec.size() << " words\n";
   d->query(bow_vec, ret, max_candidates * 3);
   std::cout << "[LoopCloser DEBUG] Query returned " << ret.size() << " results\n";
 
@@ -201,10 +209,14 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
       good_matches.push_back(knn[i][0]);
     }
   }
+  std::cout << "[LoopCloser DEBUG] Geometric verification: " << good_matches.size() << " good matches\n";
   if (good_matches.size() < 20) return false;
 
   PnPResult result = pnp_solver_->EstimatePose(
     good_matches, match_frame, query_frame, SE3::Identity());
+
+  std::cout << "[LoopCloser DEBUG] PnP result: success=" << result.success
+            << " inlier_ratio=" << result.inlier_ratio << "\n";
 
   if (result.success && result.inlier_ratio > 0.25) {
     relative_pose = result.pose;

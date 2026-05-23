@@ -290,29 +290,32 @@ TrackingReport Tracking::TrackFrameWithPnP(Frame& frame) {
     if (TryCreateKeyFrame(frame)) {
       local_map_->CullBadMapPoints(8.0, 2, 50.0);
 
-      // Every 5 keyframes: run full pose graph optimization
-      if (local_map_->NumKeyFrames() > 5 &&
-          local_map_->NumKeyFrames() % 5 == 0) {
+      // Every keyframe after the first 5: detect loops
+      if (local_map_->NumKeyFrames() > 5) {
+        std::cout << "[DEBUG] New KF created: " << local_map_->NumKeyFrames() << " keyframes total\n";
+
         // Step 1: Build sequential edges
         pose_graph_->BuildFromKeyframes(local_map_->GetAllKeyframes());
 
         // Step 2: Detect loop via descriptor matching
         DetectLoopCorrection();
 
-        // Step 3: Run PGO
-        if (pose_graph_->NumEdges() > 3) {
-          SE3 pre_pgo_pose = current_pose_;
-          int anchor_id = 0;
-          pose_graph_->Optimize(local_map_->GetAllKeyframes());
+        // Step 3: Only run full PGO every 5 keyframes
+        if (local_map_->NumKeyFrames() % 5 == 0) {
+          if (pose_graph_->NumEdges() > 3) {
+            SE3 pre_pgo_pose = current_pose_;
+            int anchor_id = 0;
+            pose_graph_->Optimize(local_map_->GetAllKeyframes());
 
-          // Propagate corrected pose to current frame
-          auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
-          if (opt_kf) {
-            SE3 kf_after = opt_kf->pose;
-            SE3 kf_before = pre_pgo_pose;
-            SE3 correction = kf_before.inverse() * kf_after;
-            current_pose_ = kf_after;  // Use optimized pose directly
-            last_pose_ = last_pose_ * correction;
+            // Propagate corrected pose to current frame
+            auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
+            if (opt_kf) {
+              SE3 kf_after = opt_kf->pose;
+              SE3 kf_before = pre_pgo_pose;
+              SE3 correction = kf_before.inverse() * kf_after;
+              current_pose_ = kf_after;  // Use optimized pose directly
+              last_pose_ = last_pose_ * correction;
+            }
           }
         }
       }
@@ -376,18 +379,22 @@ TrackingReport Tracking::TrackWithLocalMap(Frame& frame) {
   if (state_ == TrackingState::TRACKING_GOOD) {
     if (TryCreateKeyFrame(frame)) {
       local_map_->CullBadMapPoints(8.0, 2, 50.0);
-      if (local_map_->NumKeyFrames() > 5 &&
-          local_map_->NumKeyFrames() % 5 == 0) {
-        pose_graph_->BuildFromKeyframes(local_map_->GetAllKeyframes());
+      if (local_map_->NumKeyFrames() > 5) {
+        std::cout << "[DEBUG] New KF created: " << local_map_->NumKeyFrames() << " keyframes total\n";
         DetectLoopCorrection();
-        if (pose_graph_->NumEdges() > 3) {
-          SE3 pre_pgo = current_pose_;
-          pose_graph_->Optimize(local_map_->GetAllKeyframes());
-          auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
-          if (opt_kf) {
-            SE3 correction = pre_pgo.inverse() * opt_kf->pose;
-            current_pose_ = opt_kf->pose;
-            last_pose_ = last_pose_ * correction;
+        pose_graph_->BuildFromKeyframes(local_map_->GetAllKeyframes());
+        
+        // Only run full PGO every 5 keyframes
+        if (local_map_->NumKeyFrames() % 5 == 0) {
+          if (pose_graph_->NumEdges() > 3) {
+            SE3 pre_pgo = current_pose_;
+            pose_graph_->Optimize(local_map_->GetAllKeyframes());
+            auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
+            if (opt_kf) {
+              SE3 correction = pre_pgo.inverse() * opt_kf->pose;
+              current_pose_ = opt_kf->pose;
+              last_pose_ = last_pose_ * correction;
+            }
           }
         }
       }
