@@ -234,6 +234,26 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
   STSLAMConfig& config = STSLAMConfig::Instance();
   config.dataset_path = dataset_path;
   config.max_frames = max_frames;
+  
+  // Auto-detect vocabulary file
+  std::vector<std::string> vocab_candidates = {
+    "data/ORBvoc.txt",
+    "../data/ORBvoc.txt",
+    "../../data/ORBvoc.txt",
+    "/content/st_slam/data/ORBvoc.txt",
+    "/content/st_slam/st_slam/data/ORBvoc.txt"
+  };
+  for (const auto& vocab : vocab_candidates) {
+    std::ifstream test(vocab);
+    if (test.good()) {
+      config.vocab_path = vocab;
+      std::cout << "[Config] Found vocabulary: " << vocab << std::endl;
+      break;
+    }
+  }
+  if (config.vocab_path.empty()) {
+    std::cout << "[Config] No vocabulary file found, will build online" << std::endl;
+  }
 
   Tracking tracking(config);
 

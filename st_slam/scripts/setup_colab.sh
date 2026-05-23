@@ -12,6 +12,9 @@ echo "=========================================="
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJ_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+echo "[DEBUG] SCRIPT_DIR: $SCRIPT_DIR"
+echo "[DEBUG] PROJ_DIR: $PROJ_DIR"
+echo "[DEBUG] Current directory: $(pwd)"
 cd "$PROJ_DIR"
 
 # 1. Install system dependencies
@@ -58,13 +61,24 @@ fi
 # 5. Download ORB vocabulary (for loop closure)
 echo "[5/7] Downloading ORB vocabulary..."
 mkdir -p "$PROJ_DIR/data"
-if [ ! -f "$PROJ_DIR/data/ORBvoc.txt.tar.gz" ]; then
-    wget -q https://github.com/raulmur/ORB_SLAM2/raw/master/Vocabulary/ORBvoc.txt.tar.gz \
-        -O "$PROJ_DIR/data/ORBvoc.txt.tar.gz"
-    cd "$PROJ_DIR/data"
-    tar xzf ORBvoc.txt.tar.gz || true
-    cd "$PROJ_DIR"
+if [ ! -f "$PROJ_DIR/data/ORBvoc.txt" ]; then
+    echo "Downloading ORB vocabulary..."
+    if [ ! -f "$PROJ_DIR/data/ORBvoc.txt.tar.gz" ]; then
+        wget -q https://github.com/raulmur/ORB_SLAM2/raw/master/Vocabulary/ORBvoc.txt.tar.gz \
+            -O "$PROJ_DIR/data/ORBvoc.txt.tar.gz" || {
+            echo "WARNING: Could not download ORB vocabulary"
+        }
+    fi
+    if [ -f "$PROJ_DIR/data/ORBvoc.txt.tar.gz" ]; then
+        cd "$PROJ_DIR/data"
+        tar xzf ORBvoc.txt.tar.gz
+        cd "$PROJ_DIR"
+        echo "ORB vocabulary extracted."
+    fi
+else
+    echo "ORB vocabulary already exists."
 fi
+ls -lh "$PROJ_DIR/data/" 2>/dev/null || echo "data dir empty"
 
 # 6. Build ST-SLAM with DBoW3 enabled
 echo "[6/7] Building ST-SLAM with loop closure..."
