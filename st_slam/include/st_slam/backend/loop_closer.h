@@ -46,6 +46,7 @@ private:
   void* vocab_;   // DBoW3::Vocabulary* (opaque to avoid header dependency)
   void* db_;      // DBoW3::Database*
   std::vector<int> kf_id_map_;
+  std::vector<cv::Mat> descriptors_cache_;
 
   std::unique_ptr<PnPSolver> pnp_solver_;
 

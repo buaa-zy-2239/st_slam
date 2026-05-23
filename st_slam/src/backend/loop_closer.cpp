@@ -111,12 +111,15 @@ void LoopCloser::BuildVocabulary(const std::vector<cv::Mat>& all_descriptors) {
 int LoopCloser::AddKeyFrame(int kf_id, const cv::Mat& descriptors) {
 #ifdef HAS_DBOW3
   if (!db_ || descriptors.empty()) return -1;
+  auto* v = (DBoW3::Vocabulary*)vocab_;
   auto* d = (DBoW3::Database*)db_;
   DBoW3::EntryId entry_id = d->add(descriptors);
   if ((int)kf_id_map_.size() <= (int)entry_id) {
     kf_id_map_.resize(entry_id + 1, -1);
+    descriptors_cache_.resize(entry_id + 1);
   }
   kf_id_map_[entry_id] = kf_id;
+  descriptors_cache_[entry_id] = descriptors.clone();
   return (int)entry_id;
 #else
   (void)kf_id;
@@ -130,8 +133,9 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
                                                           int max_candidates) {
   std::vector<LoopCandidate> candidates;
 #ifdef HAS_DBOW3
-  if (!db_) return candidates;
+  if (!db_ || !vocab_) return candidates;
 
+  auto* v = (DBoW3::Vocabulary*)vocab_;
   auto* d = (DBoW3::Database*)db_;
 
   int current_entry = -1;
@@ -141,7 +145,9 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
   if (current_entry < 0) return candidates;
 
   DBoW3::QueryResults ret;
-  d->query(current_entry, ret, max_candidates * 3);
+  DBoW3::BowVector bow_vec;
+  v->transform(descriptors_cache_[current_entry], bow_vec);
+  d->query(bow_vec, ret, max_candidates * 3);
 
   int added = 0;
   for (const auto& qr : ret) {
