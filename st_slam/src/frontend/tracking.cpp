@@ -36,7 +36,7 @@ Tracking::Tracking(const STSLAMConfig& config)
   pose_graph_ = std::make_unique<PoseGraph>(100.0, 1000.0);
   
   if (config.use_loop_closure) {
-    loop_closer_ = std::make_unique<LoopCloser>(config.vocab_path, 525.0, 525.0, 319.5, 239.5);
+    loop_closer_ = std::make_unique<LoopCloser>(config.vocab_path, 525.0, 525.0, 319.5, 239.5, local_map_.get());
     if (!config.vocab_path.empty()) {
       std::cout << "[Tracking] LoopCloser initialized with vocab: " << config.vocab_path << std::endl;
     } else {

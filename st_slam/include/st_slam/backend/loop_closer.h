@@ -13,7 +13,8 @@ class LoopCloser {
 public:
   explicit LoopCloser(const std::string& vocab_path = "",
                        double fx = 525.0, double fy = 525.0,
-                       double cx = 319.5, double cy = 239.5);
+                       double cx = 319.5, double cy = 239.5,
+                       LocalMap* local_map = nullptr);
 
   ~LoopCloser();
 
@@ -51,6 +52,7 @@ private:
   std::unique_ptr<PnPSolver> pnp_solver_;
 
   double fx_, fy_, cx_, cy_;
+  LocalMap* local_map_;  // Pointer to access map points for 3D correspondences
 };
 
 } // namespace st_slam
