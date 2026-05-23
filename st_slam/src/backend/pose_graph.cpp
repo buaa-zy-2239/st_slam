@@ -52,12 +52,33 @@ void PoseGraph::BuildFromKeyframes(const std::unordered_map<int, KeyFrame>& keyf
 }
 
 bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
-  if (edges_.size() < 3) return false;
+  if (edges_.size() < 3) {
+    std::cout << "[PGO] Skipped: only " << edges_.size() << " edges (< 3)\n";
+    return false;
+  }
 
   std::vector<int> kf_ids;
   for (const auto& [id, _] : keyframes) kf_ids.push_back(id);
   std::sort(kf_ids.begin(), kf_ids.end());
   if (kf_ids.empty()) return false;
+
+  std::cout << "[PGO] Running global pose graph optimization on " << kf_ids.size() << " keyframes...\n";
+
+  int odometry_edges = 0;
+  int loop_edges = 0;
+  for (size_t i = 1; i < kf_ids.size(); ++i) {
+    odometry_edges++;
+  }
+  loop_edges = edges_.size() - odometry_edges;
+  std::cout << "[PGO] Built " << edges_.size() << " edges (" 
+            << odometry_edges << " odometry, " << loop_edges << " loop)\n";
+
+  std::cout << "[PGO] Pre-optimization poses:\n";
+  for (int id : kf_ids) {
+    auto& kf = keyframes[id];
+    std::cout << "  KF" << id << ": pos=(" 
+              << kf.pose.trans(0) << ", " << kf.pose.trans(1) << ", " << kf.pose.trans(2) << ")\n";
+  }
 
   std::unordered_map<int, std::array<double, 7>> params;
   for (int id : kf_ids) {
@@ -74,7 +95,6 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
 
   ceres::Problem problem;
 
-  // CRITICAL: Add ALL parameter blocks BEFORE adding any residual blocks
   for (int id : kf_ids) {
     problem.AddParameterBlock(params[id].data(), 7);
   }
@@ -95,8 +115,8 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
 
   if (added < 2) return false;
 
-  // Lock first KF
   problem.SetParameterBlockConstant(params[kf_ids[0]].data());
+  std::cout << "[PGO] Fixed " << 1 << " keyframe(s)\n";
 
   ceres::Solver::Options options;
   options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
@@ -108,12 +128,18 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
   ceres::Solver::Summary summary;
   ceres::Solve(options, &problem, &summary);
 
-  // Write back
   for (int id : kf_ids) {
     auto& p = params[id];
     Quat q(p[0], p[1], p[2], p[3]);
     q.normalize();
     keyframes[id].pose = SE3(q, Vec3(p[4], p[5], p[6]));
+  }
+
+  std::cout << "[PGO] Post-optimization poses:\n";
+  for (int id : kf_ids) {
+    auto& kf = keyframes[id];
+    std::cout << "  KF" << id << ": pos=(" 
+              << kf.pose.trans(0) << ", " << kf.pose.trans(1) << ", " << kf.pose.trans(2) << ")\n";
   }
 
   return summary.termination_type != ceres::NO_CONVERGENCE;
