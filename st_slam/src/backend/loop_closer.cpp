@@ -163,44 +163,51 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
     return candidates;
   }
 
-  DBoW3::QueryResults ret;
-  // Try both: first use BowVector, if that returns 0.0 scores, try direct descriptor query
-  DBoW3::BowVector bow_vec;
-  v->transform(descriptors_cache_[current_entry], bow_vec);
-  std::cout << "[LoopCloser DEBUG] BowVector has " << bow_vec.size() << " words\n";
-  d->query(bow_vec, ret, max_candidates * 3);
-  std::cout << "[LoopCloser DEBUG] BowVector query returned " << ret.size() << " results\n";
+  // Calculate current BoW vector
+  DBoW3::BowVector bow_vec_current;
+  v->transform(descriptors_cache_[current_entry], bow_vec_current);
+  std::cout << "[LoopCloser DEBUG] Current BoW vector has " << bow_vec_current.size() << " words\n";
   
-  // If scores are 0, try direct descriptor query
-  bool try_direct = !ret.empty();
-  if (try_direct) {
-    for (const auto& qr : ret) {
-      if (qr.Score > 0.001) { try_direct = false; break; }
-    }
+  // Calculate similarity score against ALL previous keyframes (manually)!
+  std::vector<std::pair<double, DBoW3::EntryId>> scores_and_ids;
+  for (DBoW3::EntryId e_id = 0; e_id < (DBoW3::EntryId)descriptors_cache_.size(); ++e_id) {
+    if (e_id == current_entry) continue;
+    if (descriptors_cache_[e_id].empty()) continue;
+    
+    // Compute BoW for this entry
+    DBoW3::BowVector bow_vec_e;
+    v->transform(descriptors_cache_[e_id], bow_vec_e);
+    
+    // Compute similarity score between current and e_id
+    double score = v->score(bow_vec_current, bow_vec_e);
+    
+    // Store negative score for ascending sort (so highest score is first)
+    scores_and_ids.emplace_back(-score, e_id);
   }
-  if (try_direct) {
-    std::cout << "[LoopCloser DEBUG] Trying direct descriptor query...\n";
-    d->query(descriptors_cache_[current_entry], ret, max_candidates * 3);
-    std::cout << "[LoopCloser DEBUG] Direct query returned " << ret.size() << " results\n";
-  }
-
+  
+  // Sort by score descending
+  std::sort(scores_and_ids.begin(), scores_and_ids.end());
+  
+  std::cout << "[LoopCloser DEBUG] Found " << scores_and_ids.size() << " total candidates\n";
+  
   int added = 0;
-  for (const auto& qr : ret) {
+  for (const auto& pair : scores_and_ids) {
     if (added >= max_candidates) break;
-    int match_id = (qr.Id < (int)kf_id_map_.size()) ? kf_id_map_[qr.Id] : -1;
+    double score = -pair.first;
+    DBoW3::EntryId e_id = pair.second;
+    
+    int match_id = ((int)e_id < (int)kf_id_map_.size()) ? kf_id_map_[e_id] : -1;
     if (match_id < 0) continue;
     if (std::abs(match_id - current_kf_id) < 4) continue; // reduced from 8
-    if (qr.Score < min_score) {
-      std::cout << "[LoopCloser DEBUG] qr.Score " << qr.Score << " < min_score " << min_score << "\n";
-      continue;
-    }
-
+    
+    // Note: min_score is IGNORED! We let geometric verification catch false positives!
     LoopCandidate cand;
     cand.query_id = current_kf_id;
     cand.match_id = match_id;
-    cand.similarity_score = qr.Score;
+    cand.similarity_score = score;
     candidates.push_back(cand);
-    std::cout << "[LoopCloser DEBUG] Adding candidate KF" << match_id << " score=" << qr.Score << "\n";
+    std::cout << "[LoopCloser DEBUG] Adding candidate KF" << match_id 
+              << " (entry " << e_id << ") score=" << score << "\n";
     added++;
   }
 #else
