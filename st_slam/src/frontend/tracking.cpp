@@ -549,8 +549,8 @@ VecX Tracking::ComputeResidualVector(
 }
 
 bool Tracking::DetectLoopCorrection() {
-  if (kf_history_.size() < 8) {
-    std::cout << "[DEBUG] Skip loop closure: kf_history size " << kf_history_.size() << " < 8\n";
+  if (kf_history_.size() < 4) {
+    std::cout << "[DEBUG] Skip loop closure: kf_history size " << kf_history_.size() << " < 4\n";
     return false;
   }
   if (last_frame_.descriptors.empty()) {

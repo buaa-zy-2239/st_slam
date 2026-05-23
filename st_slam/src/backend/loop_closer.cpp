@@ -173,7 +173,7 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
     if (added >= max_candidates) break;
     int match_id = (qr.Id < (int)kf_id_map_.size()) ? kf_id_map_[qr.Id] : -1;
     if (match_id < 0) continue;
-    if (std::abs(match_id - current_kf_id) < 8) continue; // reduced from 15
+    if (std::abs(match_id - current_kf_id) < 4) continue; // reduced from 8
     if (qr.Score < min_score) {
       std::cout << "[LoopCloser DEBUG] qr.Score " << qr.Score << " < min_score " << min_score << "\n";
       continue;
