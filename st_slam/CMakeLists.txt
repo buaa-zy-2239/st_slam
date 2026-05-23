@@ -26,15 +26,16 @@ include_directories(
 
 add_definitions(-DST_SLAM_VERSION="${PROJECT_VERSION}")
 
-# Optional: DBoW3 for loop closure
-find_package(DBoW3 QUIET)
-if(DBoW3_FOUND)
-  message(STATUS "DBoW3 found - enabling loop closure")
+# Optional: DBoW3 for loop closure (manually enabled)
+option(USE_DBOW3 "Use DBoW3 for loop closure detection" OFF)
+if(USE_DBOW3)
+  find_package(DBoW3 REQUIRED)
   add_definitions(-DHAS_DBOW3)
   include_directories(${DBoW3_INCLUDE_DIRS})
   set(DBOW3_LIBS ${DBoW3_LIBRARIES})
+  message(STATUS "DBoW3 ENABLED - loop closure active")
 else()
-  message(STATUS "DBoW3 not found - loop closure disabled (install: bash scripts/setup_colab.sh)")
+  message(STATUS "DBoW3 disabled (use -DUSE_DBOW3=ON to enable)")
   set(DBOW3_LIBS "")
 endif()
 

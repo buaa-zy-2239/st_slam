@@ -2,9 +2,39 @@
 #include "st_slam/frontend/pnp_solver.h"
 #include <iostream>
 #include <opencv2/features2d.hpp>
+#include <vector>
 
 #ifdef HAS_DBOW3
 #include <DBoW3.h>
+#else
+// Stub implementation when DBoW3 is not available
+namespace DBoW3 {
+  struct QueryResult {
+    int Id;
+    float Score;
+  };
+  struct QueryResults {
+    std::vector<QueryResult> vec;
+    const QueryResult* begin() const { return vec.data(); }
+    const QueryResult* end() const { return vec.data() + vec.size(); }
+    size_t size() const { return vec.size(); }
+  };
+  class Vocabulary {
+  public:
+    Vocabulary() = default;
+    void load(const std::string&) {}
+    void create(const std::vector<cv::Mat>&) {}
+    void save(const std::string&) const {}
+    int size() const { return 0; }
+  };
+  using EntryId = unsigned int;
+  class Database {
+  public:
+    void setVocabulary(const Vocabulary&) {}
+    EntryId add(const cv::Mat&) { return 0; }
+    void query(int, QueryResults&, int) const {}
+  };
+}
 #endif
 
 namespace st_slam {
