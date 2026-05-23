@@ -52,21 +52,29 @@ private:
       T q_to[4] = {p_to[0], p_to[1], p_to[2], p_to[3]};
       T t_to[3] = {p_to[4], p_to[5], p_to[6]};
 
+      // Inverse of from quaternion
       T q_from_inv[4] = {q_from[0], -q_from[1], -q_from[2], -q_from[3]};
+
+      // Compute relative pose: T_rel = T_from^{-1} * T_to
+      T q_rel[4];
+      ceres::QuaternionProduct(q_from_inv, q_to, q_rel);
+
+      // Relative translation
       T diff[3] = {t_to[0] - t_from[0], t_to[1] - t_from[1], t_to[2] - t_from[2]};
       T t_rel[3];
       ceres::QuaternionRotatePoint(q_from_inv, diff, t_rel);
 
-      T q_rel[4];
-      ceres::QuaternionProduct(q_from_inv, q_to, q_rel);
-
+      // Measured relative pose
       T m_q[4] = {T(measured_.rot.w()), T(measured_.rot.x()),
                    T(measured_.rot.y()), T(measured_.rot.z())};
       T m_t[3] = {T(measured_.trans(0)), T(measured_.trans(1)),
                    T(measured_.trans(2))};
 
+      // Error: q_rel * m_q^{-1} (computed * measured^{-1})
+      // This gives the deviation of computed from measured
+      T m_q_inv[4] = {m_q[0], -m_q[1], -m_q[2], -m_q[3]};
       T q_error[4];
-      ceres::QuaternionProduct(q_rel, m_q, q_error);
+      ceres::QuaternionProduct(q_rel, m_q_inv, q_error);
 
       T rot_res[3] = {T(2.0)*q_error[1], T(2.0)*q_error[2], T(2.0)*q_error[3]};
       T trans_res[3] = {t_rel[0]-m_t[0], t_rel[1]-m_t[1], t_rel[2]-m_t[2]};
