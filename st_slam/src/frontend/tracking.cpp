@@ -131,7 +131,12 @@ bool Tracking::Initialize(const Frame& frame) {
   state_ = TrackingState::TRACKING_GOOD;
   frame_counter_ = 0;
 
-  int kf_id = local_map_->AddKeyFrame(frame);
+  // CRITICAL FIX: Set frame.pose to identity for the first frame!
+  // This fixes the "all keyframes have zero pose" bug that caused PGO to do nothing
+  Frame frame_with_pose = frame;
+  frame_with_pose.pose = SE3::Identity();
+
+  int kf_id = local_map_->AddKeyFrame(frame_with_pose);
   last_keyframe_id_ = kf_id;
   int num_mps = CreateMapPointsFromKeyFrame(kf_id);
 
