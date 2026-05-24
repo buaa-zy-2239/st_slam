@@ -43,3 +43,16 @@ target_link_libraries(test_pose_graph
 )
 
 add_test(NAME PoseGraphTest COMMAND test_pose_graph)
+
+add_executable(test_pose_graph_debug
+  test_pose_graph_debug.cpp
+)
+
+target_link_libraries(test_pose_graph_debug
+  ${ST_SLAM_ROOT}/build/libst_slam.so
+  ${OpenCV_LIBS}
+  ${CERES_LIBRARIES}
+  Threads::Threads
+)
+
+add_test(NAME PoseGraphDebugTest COMMAND test_pose_graph_debug)

@@ -632,14 +632,14 @@ bool Tracking::DetectLoopCorrection() {
   Mat6 info = PoseGraph::DefaultInformation(50.0, 500.0);
   
   // DEBUG: Print address before adding edge
-  std::cout << "[ADDR DEBUG] Front-end PoseGraph Addr: " << pose_graph_ 
-            << " | Edge count BEFORE: " << pose_graph_->NumEdges() << std::endl;
+  std::cout << "[DEBUG] Front-end PoseGraph Addr: " << pose_graph_.get() 
+            << " | Edges BEFORE: " << pose_graph_->NumEdges() << std::endl;
   
   pose_graph_->AddEdge(best_kf_id, current_kf_id, rel_loop, info);
   
   // DEBUG: Print address after adding edge
-  std::cout << "[ADDR DEBUG] Front-end PoseGraph Addr: " << pose_graph_ 
-            << " | Edge count AFTER: " << pose_graph_->NumEdges() << std::endl;
+  std::cout << "[DEBUG] Front-end PoseGraph Addr: " << pose_graph_.get() 
+            << " | Edges AFTER: " << pose_graph_->NumEdges() << std::endl;
 
   num_loops_detected_++;
   SE3 drift = current_pose_.inverse() * best_loop_pose;
