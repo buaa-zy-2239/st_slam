@@ -56,6 +56,7 @@ else()
 endif()
 
 file(GLOB_RECURSE ST_SLAM_SOURCES src/*.cpp)
+list(FILTER ST_SLAM_SOURCES EXCLUDE REGEX ".*bridge/.*")
 
 add_library(st_slam SHARED ${ST_SLAM_SOURCES})
 target_link_libraries(st_slam
@@ -67,3 +68,15 @@ target_link_libraries(st_slam
 )
 
 add_subdirectory(apps)
+
+# Optional pybind11 bridge for Habitat-Sim
+option(BUILD_PYTHON_BINDINGS "Build pybind11 Python bindings for Habitat-Sim bridge" OFF)
+if(BUILD_PYTHON_BINDINGS)
+  find_package(pybind11 REQUIRED)
+  pybind11_add_module(st_slam_tracker src/bridge/py_st_slam.cpp)
+  target_link_libraries(st_slam_tracker PRIVATE st_slam)
+  target_include_directories(st_slam_tracker PRIVATE ${ST_SLAM_INCLUDE_DIR})
+  set_target_properties(st_slam_tracker PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/python")
+endif()

@@ -65,6 +65,8 @@ public:
 
   void RunLocalBA(int current_frame_kf_id = -1);
 
+  void RunPoseOnlyLoopBA(int match_kf_id, int query_kf_id);
+
   void CullBadMapPoints(double max_reproj_error = 8.0,
                          int min_observations = 2,
                          double max_depth_ratio = 50.0);

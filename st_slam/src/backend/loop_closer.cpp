@@ -3,6 +3,8 @@
 #include <iostream>
 #include <opencv2/features2d.hpp>
 #include <vector>
+#include <Eigen/SVD>
+#include <numeric>
 
 #ifdef HAS_DBOW3
 // Try both include styles - DBoW3.h may be in DBoW3/ subdir or directly in include path
@@ -55,6 +57,89 @@ namespace DBoW3 {
 
 namespace st_slam {
 
+// 3D-3D Umeyama alignment: solve T_a_b s.t. pts_a ≈ T_a_b * pts_b
+static bool Align3D3D_Umeyama(
+    const std::vector<Vec3>& pts_a,
+    const std::vector<Vec3>& pts_b,
+    SE3& T_a_b) {
+  int n = (int)pts_a.size();
+  if (n < 3) return false;
+
+  Vec3 ca = Vec3::Zero(), cb = Vec3::Zero();
+  for (int i = 0; i < n; ++i) { ca += pts_a[i]; cb += pts_b[i]; }
+  ca /= n; cb /= n;
+
+  Eigen::Matrix3d H = Eigen::Matrix3d::Zero();
+  for (int i = 0; i < n; ++i) {
+    Vec3 da = pts_a[i] - ca, db = pts_b[i] - cb;
+    H += da * db.transpose();
+  }
+
+  Eigen::JacobiSVD<Eigen::Matrix3d> svd(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix3d R = svd.matrixV() * svd.matrixU().transpose();
+  if (R.determinant() < 0) {
+    Eigen::Matrix3d V = svd.matrixV();
+    V.col(2) = -V.col(2);
+    R = V * svd.matrixU().transpose();
+  }
+
+  Vec3 t = ca - R * cb;
+  T_a_b = SE3(Quat(R), t);
+  return true;
+}
+
+// RANSAC: find best T_q_m from 3D-3D correspondences
+static bool RunUmeyamaRANSAC(
+    const std::vector<Vec3>& pts_q,
+    const std::vector<Vec3>& pts_m,
+    SE3& T_q_m,
+    double threshold = 0.15,
+    int max_iters = 200,
+    int min_inliers = 12) {
+  int n = (int)pts_q.size();
+  if (n < 3 || n != (int)pts_m.size()) return false;
+
+  std::vector<int> idx(n);
+  std::iota(idx.begin(), idx.end(), 0);
+
+  int best_cnt = 0;
+  SE3 best_T;
+
+  for (int iter = 0; iter < max_iters; ++iter) {
+    std::vector<Vec3> sq, sm;
+    for (int k = 0; k < 3; ++k) {
+      int ri = rand() % n;
+      sq.push_back(pts_q[ri]);
+      sm.push_back(pts_m[ri]);
+    }
+
+    SE3 T;
+    if (!Align3D3D_Umeyama(sq, sm, T)) continue;
+
+    int cnt = 0;
+    for (int i = 0; i < n; ++i) {
+      if ((T * pts_m[i] - pts_q[i]).norm() < threshold) cnt++;
+    }
+
+    if (cnt > best_cnt) {
+      best_cnt = cnt;
+      best_T = T;
+    }
+  }
+
+  if (best_cnt < min_inliers) return false;
+
+  // Refine with all inliers
+  std::vector<Vec3> iq, im;
+  for (int i = 0; i < n; ++i) {
+    if ((best_T * pts_m[i] - pts_q[i]).norm() < threshold) {
+      iq.push_back(pts_q[i]);
+      im.push_back(pts_m[i]);
+    }
+  }
+  return Align3D3D_Umeyama(iq, im, T_q_m);
+}
+
 LoopCloser::LoopCloser(const std::string& vocab_path,
                        double fx, double fy,
                        double cx, double cy,
@@ -69,7 +154,7 @@ LoopCloser::LoopCloser(const std::string& vocab_path,
     LoadVocabulary(vocab_path);
   }
 #endif
-  pnp_solver_ = std::make_unique<PnPSolver>(fx_, fy_, cx_, cy_, 3.0, 12, 200);
+  pnp_solver_ = std::make_unique<PnPSolver>(fx_, fy_, cx_, cy_, 6.0, 4, 200);
 }
 
 LoopCloser::~LoopCloser() {
@@ -206,7 +291,6 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
   (void)current_kf_id; (void)min_score; (void)max_candidates;
 #endif
   
-  std::cout << "[DEBUG] Candidates: " << candidates.size() << "\n";
   return candidates;
 }
 
@@ -214,18 +298,12 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
                                          const Frame& query_frame,
                                          const Frame& match_frame,
                                          SE3& relative_pose) {
-  // First check if we have access to the local map
-  if (!local_map_) {
-    return false;
-  }
+  if (!local_map_) return false;
 
-  // Get the keyframe data from local_map (this has the map point IDs!)
   const KeyFrame* match_kf = local_map_->GetKeyFrame(match_kf_id);
-  if (!match_kf) {
-    return false;
-  }
+  const KeyFrame* query_kf = local_map_->GetKeyFrame(query_kf_id);
+  if (!match_kf || !query_kf) return false;
 
-  // Feature matching
   cv::BFMatcher matcher(cv::NORM_HAMMING, false);
   std::vector<std::vector<cv::DMatch>> knn;
   matcher.knnMatch(query_frame.descriptors, match_kf->descriptors, knn, 2);
@@ -237,78 +315,79 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
       good_matches.push_back(knn[i][0]);
     }
   }
-  if (good_matches.size() < 15) return false;
+  if ((int)good_matches.size() < 10) return false;
 
-  // Build 2D-3D correspondences!
-  std::vector<cv::DMatch> matches_with_3d;
-  std::vector<cv::Point3f> object_points;
-  std::vector<cv::Point2f> image_points;
-
-  int num_3d_points_found = 0;
+  // Build 3D-3D correspondences from STABLE MapPoints (both sides)
+  // P_q = query_kf->pose.inverse() * query_mp->position  (stable, multi-frame)
+  // P_m = match_kf->pose.inverse() * match_mp->position  (stable, multi-frame)
+  SE3 T_q_w = query_kf->pose;
+  SE3 T_m_w = match_kf->pose;
+  std::vector<Vec3> pts_q, pts_m;
   for (const auto& m : good_matches) {
-    int match_idx = m.trainIdx;
-    
-    // Check if this feature in match_kf has an associated map point!
-    if (match_idx >= 0 && match_idx < (int)match_kf->map_points.size()) {
-      int mp_id = match_kf->map_points[match_idx];
-      if (mp_id >= 0) {
-        const MapPoint* mp = local_map_->GetMapPoint(mp_id);
-        if (mp) {
-          // Got a valid 2D-3D correspondence!
-          matches_with_3d.push_back(m);
-          object_points.push_back(cv::Point3f(
-            (float)mp->position[0], (float)mp->position[1], (float)mp->position[2]));
-          image_points.push_back(query_frame.keypoints[m.queryIdx].pt);
-          num_3d_points_found++;
+    int q_idx = m.queryIdx;
+    int m_idx = m.trainIdx;
+
+    // Query side: use stable map point from query_kf
+    if (q_idx >= 0 && q_idx < (int)query_kf->map_points.size()) {
+      int q_mp_id = query_kf->map_points[q_idx];
+      if (q_mp_id >= 0) {
+        const MapPoint* q_mp = local_map_->GetMapPoint(q_mp_id);
+        if (q_mp && q_mp->position.norm() > 1e-6) {
+          Vec3 p_q_cam = T_q_w.inverse() * q_mp->position;
+          if (p_q_cam(2) >= 0.01) {
+            // Match side: use stable map point from match_kf
+            if (m_idx >= 0 && m_idx < (int)match_kf->map_points.size()) {
+              int m_mp_id = match_kf->map_points[m_idx];
+              if (m_mp_id >= 0) {
+                const MapPoint* m_mp = local_map_->GetMapPoint(m_mp_id);
+                if (m_mp && m_mp->position.norm() > 1e-6) {
+                  Vec3 p_m_cam = T_m_w.inverse() * m_mp->position;
+                  if (p_m_cam(2) >= 0.01) {
+                    pts_q.push_back(p_q_cam);
+                    pts_m.push_back(p_m_cam);
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
   }
 
-  std::cout << "[LoopCloser DEBUG] Found " << num_3d_points_found << " valid 2D-3D correspondences\n";
-  if (num_3d_points_found < 10) {
-    std::cout << "[LoopCloser DEBUG] Not enough 3D points for PnP\n";
-    return false;
-  }
+  if ((int)pts_q.size() < 10) return false;
 
-  // Now use the PnPSolver with the correct 2D-3D correspondences
-  // First build a temporary Frame with the 3D points
-  Frame temp_frame = query_frame;
-  temp_frame.keypoints_3d.resize(image_points.size());
-  for (size_t i = 0; i < object_points.size(); ++i) {
-    temp_frame.keypoints_3d[i] = Vec3(object_points[i].x, object_points[i].y, object_points[i].z);
-  }
+  SE3 T_q_m;
+  if (!RunUmeyamaRANSAC(pts_q, pts_m, T_q_m, 0.2, 300, 10)) return false;
 
-  // We need to pass matches to the PnPSolver that point to these 3D points
-  // Let's create dummy matches that just go from 0 to num_3d_points_found
-  std::vector<cv::DMatch> pnp_matches;
-  for (int i = 0; i < (int)matches_with_3d.size(); ++i) {
-    cv::DMatch m;
-    m.queryIdx = matches_with_3d[i].queryIdx;
-    m.trainIdx = i;  // index in our temp keypoints_3d
-    pnp_matches.push_back(m);
-  }
+  double dist = T_q_m.trans.norm();
+  AngleAxis aa(T_q_m.rot);
+  double deg = aa.angle() * 180.0 / M_PI;
 
-  // Quick sanity check: if we have enough 3D points, just use the pose difference
-  // as a fallback (sometimes PnP with sparse features can fail)
-  if (local_map_->GetKeyFrame(query_kf_id)) {
-    const KeyFrame* q_kf = local_map_->GetKeyFrame(query_kf_id);
-    if (q_kf && match_kf) {
-      SE3 T_q = q_kf->pose;
-      SE3 T_m = match_kf->pose;
-      relative_pose = T_m.inverse() * T_q;
-      return true;  // Just trust the pose graph if we have BoW match!
-    }
-  }
+  if (dist > 8.0 || deg > 90) return false;
 
-  // Fallback: if we have map points, try PnP
-  PnPResult result = pnp_solver_->EstimatePose(
-    pnp_matches, temp_frame, query_frame, SE3::Identity());
+  // DRIFT CONSISTENCY + CHI-SQUARED PRUNING
+  SE3 T_traj_rel = T_m_w.inverse() * query_kf->pose;
+  SE3 drift = T_traj_rel.inverse() * T_q_m;
+  double drift_dist = drift.trans.norm();
+  AngleAxis drift_aa(drift.rot);
+  double drift_deg = drift_aa.angle() * 180.0 / M_PI;
 
-  if (result.success && result.inlier_ratio > 0.15) {
-    relative_pose = result.pose;
+  // Compute chi2 with same info weights as PoseGraph::DefaultInformation(50,500)
+  Vec3 rot_err = drift_aa.axis() * drift_aa.angle();
+  Vec3 trans_err = drift.trans;
+  double chi2 = 50.0 * rot_err.squaredNorm() + 500.0 * trans_err.squaredNorm();
+
+  std::cout << "[LOOP] " << (int)pts_q.size() << "pts"
+            << " drift=" << (drift_dist*100) << "cm " << drift_deg << "deg"
+            << " chi2=" << chi2 << "\n";
+
+  // χ²(6) threshold = 20 (ultra-tight, single best loop breaks through)
+  if (drift_dist < 0.3 && drift_deg < 15 && chi2 < 20.0) {
+    relative_pose = T_q_m;
     return true;
   }
+
   return false;
 }
 

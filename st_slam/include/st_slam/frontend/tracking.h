@@ -13,6 +13,9 @@
 #include "st_slam/frontend/pnp_solver.h"
 #include "st_slam/frontend/local_map.h"
 #include "st_slam/backend/loop_closer.h"
+#include "st_slam/perception/local_costmap.h"
+#include "st_slam/perception/topological_graph.h"
+#include "st_slam/perception/pose_interpolator.h"
 #include <memory>
 #include <optional>
 
@@ -45,6 +48,14 @@ public:
   int GetNumLoopsDetected() const { return num_loops_detected_; }
   
   PoseGraph* GetPoseGraph() { return pose_graph_.get(); }
+  
+  const LocalCostmap& GetLocalCostmap() const { return *local_costmap_; }
+  
+  const TopologicalGraph& GetTopoGraph() const { return *topo_graph_; }
+
+  SE3 GetSmoothPose() const { return pose_interpolator_->GetSmoothPose(); }
+
+  TrackingReport StepHabitat(const cv::Mat& rgb, const cv::Mat& depth, double timestamp);
 
 private:
   STSLAMConfig config_;
@@ -67,11 +78,15 @@ private:
   std::unique_ptr<LocalMap> local_map_;
   std::unique_ptr<PoseGraph> pose_graph_;
   std::unique_ptr<LoopCloser> loop_closer_;
+  std::unique_ptr<LocalCostmap> local_costmap_;
+  std::unique_ptr<TopologicalGraph> topo_graph_;
+  std::unique_ptr<PoseInterpolator> pose_interpolator_;
 
   std::vector<Vec3> imu_accel_buffer_;
   std::vector<Vec3> imu_gyro_buffer_;
 
   int last_keyframe_id_ = -1;
+  int last_topo_kf_id_ = -1;
   int num_loops_detected_ = 0;
   int last_near_kf_id_ = -1;
   double last_imu_timestamp_ = 0;
@@ -115,6 +130,8 @@ public:
                               const Frame& cur_frame);
 
   void RunNCIO(double dt, const Vec3& accel, const Vec3& gyro);
+
+  void UpdateLocalCostmap();
 
   void UpdateGravityFromAccel(const Vec3& accel);
   void ApplyGravityConstraint(SE3& pose);

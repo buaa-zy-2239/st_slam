@@ -2,6 +2,8 @@
 #include "st_slam/core/math_utils.h"
 #include <ceres/rotation.h>
 #include <iostream>
+#include <algorithm>
+#include <unordered_set>
 
 namespace st_slam {
 
@@ -60,12 +62,10 @@ void PoseGraph::BuildFromKeyframes(const std::unordered_map<int, KeyFrame>& keyf
     if (from_it == keyframes.end() || to_it == keyframes.end()) continue;
 
     SE3 rel = from_it->second.pose.inverse() * to_it->second.pose;
-    Mat6 info = DefaultInformation(rot_info_weight_, trans_info_weight_);
+    Mat6 info = DefaultInformation(
+      rot_info_weight_ * 50.0, trans_info_weight_ * 50.0);
     AddEdge(from_id, to_id, rel, info);
   }
-  
-  std::cout << "[DEBUG] BuildFromKeyframes: kept " << (edges_.size() - (kf_ids.size()-1)) 
-            << " loop edges\n";
 }
 
 bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
@@ -78,28 +78,6 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
   for (const auto& [id, _] : keyframes) kf_ids.push_back(id);
   std::sort(kf_ids.begin(), kf_ids.end());
   if (kf_ids.empty()) return false;
-
-  // DEBUG: Print address and edge count
-  std::cout << "[ADDR DEBUG] Back-end PoseGraph Addr: " << this 
-            << " | Total edges BEFORE: " << edges_.size() << std::endl;
-
-  std::cout << "[PGO] Running global pose graph optimization on " << kf_ids.size() << " keyframes...\n";
-
-  int odometry_edges = 0;
-  int loop_edges = 0;
-  for (size_t i = 1; i < kf_ids.size(); ++i) {
-    odometry_edges++;
-  }
-  loop_edges = edges_.size() - odometry_edges;
-  std::cout << "[PGO] Built " << edges_.size() << " edges (" 
-            << odometry_edges << " odometry, " << loop_edges << " loop)\n";
-
-  std::cout << "[PGO] Pre-optimization poses:\n";
-  for (int id : kf_ids) {
-    auto& kf = keyframes[id];
-    std::cout << "  KF" << id << ": pos=(" 
-              << kf.pose.trans(0) << ", " << kf.pose.trans(1) << ", " << kf.pose.trans(2) << ")\n";
-  }
 
   std::unordered_map<int, std::array<double, 7>> params;
   for (int id : kf_ids) {
@@ -128,7 +106,12 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
     Mat6 sqrt_info = edge.information.llt().matrixL();
     ceres::CostFunction* cost =
       PoseGraph3DError::Create(edge.relative_pose, sqrt_info);
-    problem.AddResidualBlock(cost, nullptr,
+
+    int diff = std::abs(edge.to_id - edge.from_id);
+    ceres::LossFunction* loss = (diff != 1) ?
+      new ceres::CauchyLoss(0.5) : nullptr;
+
+    problem.AddResidualBlock(cost, loss,
                               params[edge.from_id].data(),
                               params[edge.to_id].data());
     added++;
@@ -136,14 +119,37 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
 
   if (added < 2) return false;
 
-  problem.SetParameterBlockConstant(params[kf_ids[0]].data());
-  std::cout << "[PGO] Fixed " << 1 << " keyframe(s)\n";
+  // Active window: recent KFs + loop-adjacent KFs stay unfixed
+  int window_size = 20;
+  int max_id = kf_ids.back();
+  int min_active_id = std::max(0, max_id - window_size);
+
+  std::unordered_set<int> active_kfs;
+  for (int id : kf_ids) {
+    if (id >= min_active_id) active_kfs.insert(id);
+  }
+  for (const auto& edge : edges_) {
+    if (std::abs(edge.to_id - edge.from_id) != 1) {
+      for (int d = -2; d <= 2; ++d) {
+        active_kfs.insert(edge.from_id + d);
+        active_kfs.insert(edge.to_id + d);
+      }
+    }
+  }
+
+  int fixed_count = 0;
+  for (int id : kf_ids) {
+    if (active_kfs.find(id) == active_kfs.end() && id != kf_ids[0]) {
+      problem.SetParameterBlockConstant(params[id].data());
+      fixed_count++;
+    }
+  }
 
   ceres::Solver::Options options;
   options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY;
-  options.max_num_iterations = 30;
-  options.function_tolerance = 1e-8;
-  options.parameter_tolerance = 1e-10;
+  options.max_num_iterations = 5;
+  options.function_tolerance = 1e-6;
+  options.parameter_tolerance = 1e-8;
   options.minimizer_progress_to_stdout = false;
 
   ceres::Solver::Summary summary;
@@ -154,13 +160,6 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
     Quat q(p[0], p[1], p[2], p[3]);
     q.normalize();
     keyframes[id].pose = SE3(q, Vec3(p[4], p[5], p[6]));
-  }
-
-  std::cout << "[PGO] Post-optimization poses:\n";
-  for (int id : kf_ids) {
-    auto& kf = keyframes[id];
-    std::cout << "  KF" << id << ": pos=(" 
-              << kf.pose.trans(0) << ", " << kf.pose.trans(1) << ", " << kf.pose.trans(2) << ")\n";
   }
 
   return summary.termination_type != ceres::FAILURE;

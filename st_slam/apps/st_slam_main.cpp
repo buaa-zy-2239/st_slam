@@ -243,7 +243,9 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
     "/content/st_slam/data/ORBvoc.txt",
     "/content/st_slam/st_slam/data/ORBvoc.txt",
     "/home/zhang/ORB_SLAM_Learning/ORBvoc.txt",
-    "../../../ORBvoc.txt"
+    "../../../ORBvoc.txt",
+    "ORBvoc.txt",
+    "/home/zhang/ORB_SLAM_Learning/st_slam/build/ORBvoc.txt"
   };
   for (const auto& vocab : vocab_candidates) {
     std::ifstream test(vocab);
@@ -272,6 +274,9 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
   std::vector<TrackingReport> tracking_reports;
   int lost_count = 0;
 
+  std::vector<Vec3> global_positions;
+  std::vector<Vec3> smooth_positions;
+
   auto bench_start = std::chrono::steady_clock::now();
 
   for (int i = 0; i < total; ++i) {
@@ -286,6 +291,8 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
     TrackingReport report = tracking.TrackFrame(frame);
 
     estimated_poses.push_back(tracking.GetCurrentPose());
+    global_positions.push_back(tracking.GetCurrentPose().trans);
+    smooth_positions.push_back(tracking.GetSmoothPose().trans);
     frame_timestamps.push_back(frame.timestamp);
     tracking_times.push_back(report.tracking_time_ms);
     tracking_reports.push_back(report);
@@ -440,6 +447,65 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
     f << "QUALITY " << benchmark::QualityLabel(
       benchmark::ClassifyATEQuality(metrics.ate_rmse, scene)) << "\n";
     std::cout << "  -> metrics_report.txt\n";
+  }
+
+  // Local costmap stats
+  {
+    auto& lc = tracking.GetLocalCostmap();
+    std::cout << "\n--- Local Costmap ---\n";
+    std::cout << "  Update: " << std::setprecision(3) << lc.last_update_ms() << " ms\n";
+    std::cout << "  Obstacle pts: " << lc.num_obstacle_points() << "\n";
+  }
+
+  // Topological graph stats
+  {
+    auto& tg = tracking.GetTopoGraph();
+    std::cout << "--- Topological Graph ---\n";
+    std::cout << "  Nodes: " << tg.NumNodes() << "\n";
+    std::cout << "  Edges: " << tg.NumEdges() << "\n";
+    std::cout << "  Loop edges: " << tg.NumLoopEdges() << "\n";
+  }
+
+  // Smooth pose vs global pose comparison
+  {
+    SE3 global = tracking.GetCurrentPose();
+    SE3 smooth = tracking.GetSmoothPose();
+    Vec3 diff = smooth.trans - global.trans;
+    std::cout << "--- Pose Interpolator ---\n";
+    std::cout << "  Smooth vs global delta: "
+              << std::setprecision(3) << (diff.norm() * 100) << " cm\n";
+  }
+
+  // Jerk ablation CSV: find frame with max smooth-vs-global deviation
+  if (loop_count > 0 && (int)global_positions.size() > 10) {
+    int loop_frame = -1;
+    double max_diff = 0;
+    for (size_t i = 0; i < global_positions.size(); ++i) {
+      double d = (smooth_positions[i] - global_positions[i]).norm();
+      if (d > max_diff) { max_diff = d; loop_frame = (int)i; }
+    }
+
+    std::ofstream csv("jerk_ablation_results.csv");
+    csv << "Frame,Global_Jerk,Smoothed_Jerk,Global_Pos,Smoothed_Pos\n";
+    int start = std::max(2, loop_frame - 5);
+    int end = std::min((int)global_positions.size() - 1, loop_frame + 10);
+    for (int i = start; i < end; ++i) {
+      Vec3 g_v1 = global_positions[i] - global_positions[i-1];
+      Vec3 g_v2 = global_positions[i-1] - global_positions[i-2];
+      double g_jerk = (g_v1 - g_v2).norm();
+
+      Vec3 s_v1 = smooth_positions[i] - smooth_positions[i-1];
+      Vec3 s_v2 = smooth_positions[i-1] - smooth_positions[i-2];
+      double s_jerk = (s_v1 - s_v2).norm();
+
+      csv << i << ","
+          << g_jerk << ","
+          << s_jerk << ","
+          << global_positions[i].norm() << ","
+          << smooth_positions[i].norm() << "\n";
+    }
+    csv.close();
+    std::cout << "  -> jerk_ablation_results.csv\n";
   }
 
   std::cout << std::endl;

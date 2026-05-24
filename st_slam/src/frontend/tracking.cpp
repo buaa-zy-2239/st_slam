@@ -35,6 +35,9 @@ Tracking::Tracking(const STSLAMConfig& config)
     525.0, 525.0, 319.5, 239.5, 3.0, 12, 300);
   local_map_ = std::make_unique<LocalMap>(20, 40);
   pose_graph_ = std::make_unique<PoseGraph>(100.0, 1000.0);
+  local_costmap_ = std::make_unique<LocalCostmap>();
+  topo_graph_ = std::make_unique<TopologicalGraph>();
+  pose_interpolator_ = std::make_unique<PoseInterpolator>();
   
   if (config.use_loop_closure) {
     loop_closer_ = std::make_unique<LoopCloser>(config.vocab_path, 525.0, 525.0, 319.5, 239.5, local_map_.get());
@@ -126,7 +129,6 @@ void Tracking::ApplyGravityConstraint(SE3& pose) {
 }
 
 bool Tracking::Initialize(const Frame& frame) {
-  ref_frame_ = frame;
   if (init_pose_override_) {
     current_pose_ = *init_pose_override_;
     last_pose_ = *init_pose_override_;
@@ -137,6 +139,9 @@ bool Tracking::Initialize(const Frame& frame) {
     current_pose_ = SE3::Identity();
     last_pose_ = SE3::Identity();
   }
+  
+  ref_frame_ = frame;
+  ref_frame_.pose = current_pose_;
   state_ = TrackingState::TRACKING_GOOD;
   frame_counter_ = 0;
 
@@ -216,7 +221,17 @@ bool Tracking::TryCreateKeyFrame(Frame& frame) {
     if (kf_history_.size() > 500) kf_history_.pop_front();
     
     // Add KF to LoopCloser database
-    loop_closer_->AddKeyFrame(kf_id, frame.descriptors);
+    if (loop_closer_) {
+      loop_closer_->AddKeyFrame(kf_id, frame.descriptors);
+    }
+
+    // Topological graph: add node and edge from previous node
+    topo_graph_->AddNode(kf_id, current_pose_);
+    if (last_topo_kf_id_ >= 0) {
+      SE3 rel = local_map_->GetKeyFrame(last_topo_kf_id_)->pose.inverse() * current_pose_;
+      topo_graph_->AddEdge(last_topo_kf_id_, kf_id, rel, 50.0, false);
+    }
+    last_topo_kf_id_ = kf_id;
 
     return true;
   }
@@ -228,13 +243,13 @@ int Tracking::CreateMapPointsFromKeyFrame(int kf_id) {
   if (!kf) return 0;
 
   int count = 0;
-  std::vector<int> mp_ids;
+  std::vector<int> mp_ids(kf->keypoints.size(), -1);
   for (size_t i = 0; i < kf->keypoints.size(); ++i) {
     if (i < ref_frame_.keypoints_3d.size() && ref_frame_.keypoints_3d[i].norm() > 1e-6) {
       Vec3 world_pt = current_pose_ * ref_frame_.keypoints_3d[i];
       double depth = ref_frame_.keypoints_3d[i](2);
       int mp_id = local_map_->AddMapPoint(world_pt, ref_frame_.descriptors.row(i), kf_id, depth);
-      mp_ids.push_back(mp_id);
+      mp_ids[i] = mp_id;
       count++;
     }
   }
@@ -308,23 +323,15 @@ TrackingReport Tracking::TrackFrameWithPnP(Frame& frame) {
     report_.degeneracy = DegeneracyState::FULL_DEGENERATE;
   }
 
-  // DEBUG: Print tracking displacement magnitude
+  // Remove the verbose TRACKING debug block (delta_t print)
   if (frame_counter_ > 0) {
     Vec3 delta_t = current_pose_.trans - last_pose_.trans;
-    Quat delta_q = last_pose_.rot.conjugate() * current_pose_.rot;
-    AngleAxis aa(delta_q);
-    double delta_angle_deg = aa.angle() * 180.0 / M_PI;
-    std::cout << "[TRACKING] Frame " << frame_counter_ << " Delta: trans="
-              << std::fixed << std::setprecision(3) << delta_t.norm() << "m rot="
-              << std::fixed << std::setprecision(2) << delta_angle_deg << "deg | Pose pos=("
-              << std::fixed << std::setprecision(4)
-              << current_pose_.trans(0) << ", " << current_pose_.trans(1) << ", "
-              << current_pose_.trans(2) << ")\n";
   }
 
   last_pose_ = current_pose_;
   last_frame_ = frame;
   ref_frame_ = frame;
+  ref_frame_.pose = current_pose_;
 
   // Lightweight backend: KF management + loop detection + global PGO
   if (state_ == TrackingState::TRACKING_GOOD) {
@@ -333,17 +340,13 @@ TrackingReport Tracking::TrackFrameWithPnP(Frame& frame) {
 
       // Every keyframe after the first 5: detect loops
       if (local_map_->NumKeyFrames() > 5) {
-        std::cout << "[DEBUG] New KF created: " << local_map_->NumKeyFrames() << " keyframes total\n";
-
-        // Step 1: Build sequential edges FIRST
-        // (BuildFromKeyframes clears all edges, so must be done first!)
+        int edges_before = pose_graph_->NumEdges();
         pose_graph_->BuildFromKeyframes(local_map_->GetAllKeyframes());
+        bool loop_found = DetectLoopCorrection();
 
-        // Step 2: Detect loop via descriptor matching AFTER
-        DetectLoopCorrection();
-
-        // Step 3: Run PGO on every keyframe after the first 5
-        if (local_map_->NumKeyFrames() > 5 && pose_graph_->NumEdges() > 3) {
+        // Only run PGO when a new loop edge was added
+        bool new_loop = loop_found || (pose_graph_->NumEdges() > edges_before);
+        if (new_loop && pose_graph_->NumEdges() > 3) {
           auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
           SE3 kf_before_opt;
           if (opt_kf) kf_before_opt = opt_kf->pose;
@@ -355,8 +358,6 @@ TrackingReport Tracking::TrackFrameWithPnP(Frame& frame) {
             SE3 correction = kf_before_opt.inverse() * kf_after_opt;
             current_pose_ = correction * current_pose_;
             last_pose_ = correction * last_pose_;
-            std::cout << "[DEBUG] PGO correction: trans=" << correction.trans.norm()
-                      << "m rot=" << (2*acos(std::abs(correction.rot.w()))) * 180/3.14159 << "deg\n";
           }
         }
       }
@@ -382,8 +383,6 @@ TrackingReport Tracking::TrackWithLocalMap(Frame& frame) {
 
   std::vector<cv::DMatch> matches;
   ORBExtractor::ComputeStereoMatches(ref_frame_, frame, matches);
-
-  std::vector<MapPoint> local_mps = local_map_->GetLocalMapPoints(last_keyframe_id_);
 
   PnPResult pnp_result = pnp_solver_->EstimatePose(matches, ref_frame_, frame, pred_pose);
 
@@ -421,30 +420,23 @@ TrackingReport Tracking::TrackWithLocalMap(Frame& frame) {
     if (TryCreateKeyFrame(frame)) {
       local_map_->CullBadMapPoints(8.0, 2, 50.0);
       if (local_map_->NumKeyFrames() > 5) {
-        std::cout << "[DEBUG] New KF created: " << local_map_->NumKeyFrames() << " keyframes total\n";
-        DetectLoopCorrection();
+        int edges_before = pose_graph_->NumEdges();
         pose_graph_->BuildFromKeyframes(local_map_->GetAllKeyframes());
-        
-        // Run PGO on every keyframe after the first 5
-        // (Removed % 5 == 0 requirement so PGO runs with 7 keyframes!)
-        if (local_map_->NumKeyFrames() > 5 && pose_graph_->NumEdges() > 3) {
-          // Save keyframe pose BEFORE optimization
+        bool loop_found = DetectLoopCorrection();
+
+        bool new_loop = loop_found || (pose_graph_->NumEdges() > edges_before);
+         if (new_loop && pose_graph_->NumEdges() > 3) {
           auto* opt_kf = local_map_->GetKeyFrame(last_keyframe_id_);
           SE3 kf_before_opt;
           if (opt_kf) kf_before_opt = opt_kf->pose;
 
           pose_graph_->Optimize(local_map_->GetAllKeyframes());
 
-          // Propagate corrected pose to current frame
           if (opt_kf) {
             SE3 kf_after_opt = opt_kf->pose;
-            // Compute correction from keyframe pose change
             SE3 correction = kf_before_opt.inverse() * kf_after_opt;
-            // Apply correction to current pose
             current_pose_ = correction * current_pose_;
             last_pose_ = correction * last_pose_;
-            std::cout << "[PGO] Applied correction: trans=" << correction.trans.norm()
-                      << "m rot=" << (2*acos(std::abs(correction.rot.w()))) * 180/3.14159 << "deg\n";
           }
         }
       }
@@ -453,6 +445,7 @@ TrackingReport Tracking::TrackWithLocalMap(Frame& frame) {
 
   last_pose_ = current_pose_;
   ref_frame_ = frame;
+  ref_frame_.pose = current_pose_;
 
   auto end = std::chrono::steady_clock::now();
   report_.tracking_time_ms = std::chrono::duration<double, std::milli>(end - start).count();
@@ -508,10 +501,43 @@ TrackingReport Tracking::TrackFrame(Frame& frame) {
   orb_extractor_->Extract(frame);
   frame_handler_->BackProjectDepth(frame);
 
+  TrackingReport rep;
   if (local_map_->NumKeyFrames() >= 3) {
-    return TrackWithLocalMap(frame);
+    rep = TrackWithLocalMap(frame);
   } else {
-    return TrackFrameWithPnP(frame);
+    rep = TrackFrameWithPnP(frame);
+  }
+
+  UpdateLocalCostmap();
+  pose_interpolator_->PushPose(current_pose_);
+  return rep;
+}
+
+TrackingReport Tracking::StepHabitat(const cv::Mat& rgb, const cv::Mat& depth, double timestamp) {
+  Frame frame;
+  frame.rgb = rgb.clone();
+  cv::cvtColor(rgb, frame.gray, cv::COLOR_BGR2GRAY);
+  frame.depth = depth.clone();
+  frame.timestamp = timestamp;
+  return TrackFrame(frame);
+}
+
+void Tracking::UpdateLocalCostmap() {
+  const auto& kfs = local_map_->GetAllKeyframes();
+  std::vector<Vec3> active_mps;
+  int last_id = -1;
+  for (const auto& [id, _] : kfs) if (id > last_id) last_id = id;
+  for (int id = std::max(0, last_id - 5); id <= last_id; ++id) {
+    auto* kf = local_map_->GetKeyFrame(id);
+    if (!kf) continue;
+    for (int mp_id : kf->map_points) {
+      if (mp_id < 0) continue;
+      auto* mp = local_map_->GetMapPoint(mp_id);
+      if (mp) active_mps.push_back(mp->position);
+    }
+  }
+  if (!active_mps.empty()) {
+    local_costmap_->Update(current_pose_, active_mps);
   }
 }
 
@@ -545,7 +571,8 @@ Mat6 Tracking::ComputeGeometricHessian(
     if (ref_idx >= (int)ref_frame.keypoints_3d.size()) continue;
     if (ref_frame.keypoints_3d[ref_idx].norm() < 1e-6) continue;
 
-    Vec3 pt3d = current_pose_ * ref_frame.keypoints_3d[ref_idx];
+    Vec3 world_pt = ref_frame.pose * ref_frame.keypoints_3d[ref_idx];
+    Vec3 pt3d = current_pose_.inverse() * world_pt;
     if (pt3d(2) < 0.1) continue;
 
     double x = pt3d(0) / pt3d(2);
@@ -583,7 +610,8 @@ VecX Tracking::ComputeResidualVector(
         cur_idx >= (int)cur_frame.keypoints.size()) continue;
     if (ref_frame.keypoints_3d[ref_idx].norm() < 1e-6) continue;
 
-    Vec3 pt3d = current_pose_ * ref_frame.keypoints_3d[ref_idx];
+    Vec3 world_pt = ref_frame.pose * ref_frame.keypoints_3d[ref_idx];
+    Vec3 pt3d = current_pose_.inverse() * world_pt;
     if (pt3d(2) < 0.1) continue;
 
     double u_proj = fx * pt3d(0) / pt3d(2) + cx;
@@ -600,15 +628,12 @@ VecX Tracking::ComputeResidualVector(
 
 bool Tracking::DetectLoopCorrection() {
   if (kf_history_.size() < 4) {
-    std::cout << "[DEBUG] Skip loop closure: kf_history size " << kf_history_.size() << " < 4\n";
     return false;
   }
   if (last_frame_.descriptors.empty()) {
-    std::cout << "[DEBUG] Skip loop closure: no descriptors\n";
     return false;
   }
   if (!loop_closer_ || !loop_closer_->HasDatabase()) {
-    std::cout << "[DEBUG] Skip loop closure: loop_closer not initialized\n";
     return false;
   }
 
@@ -643,48 +668,37 @@ bool Tracking::DetectLoopCorrection() {
     }
     
     if (loop_closer_->GeometricVerification(current_kf_id, cand.match_id, last_frame_, pseudo_frame, loop_pose)) {
-      // Check if it's a good loop
-      SE3 drift = current_pose_.inverse() * loop_pose;
-      double drift_dist = drift.trans.norm();
-      AngleAxis drift_aa(drift.rot);
-      double drift_deg = drift_aa.angle() * 180.0 / M_PI;
-      
-      if (drift_dist > 0.005 && drift_dist < 0.8 && drift_deg < 25) {
-        best_kf_id = cand.match_id;
-        best_loop_pose = loop_pose;
-        break;
-      }
+      std::cout << "[LOOP] KF" << cand.match_id << "→" << current_kf_id
+                << " score=" << cand.similarity_score << "\n";
+      best_kf_id = cand.match_id;
+      best_loop_pose = loop_pose;
+      break;
     }
   }
 
   if (best_kf_id < 0) return false;
 
   // Add loop constraint to pose graph
-  // relative_pose from GeometricVerification is T_match.inverse() * T_query (from match to query)
-  // So rel_loop = best_loop_pose directly (not inverse!)
-  // This matches Ceres convention: T_rel = T_from.inverse() * T_to
-  // where from=match_kf, to=query_kf, T_rel=T_match_query
-  SE3 rel_loop = best_loop_pose;
-  Mat6 info = PoseGraph::DefaultInformation(50.0, 500.0);
-  
-  // DEBUG: Print address before adding edge
-  std::cout << "[DEBUG] Front-end PoseGraph Addr: " << pose_graph_.get() 
-            << " | Edges BEFORE: " << pose_graph_->NumEdges() << std::endl;
-  
+  // Umeyama T_q_m = T_q_cam^{-1} * T_m_cam transforms match→query camera frame
+  // PoseGraph3DError: error = measured^{-1} * computed_rel
+  //   where measured = edge.relative_pose
+  //         computed_rel = T_from^{-1} * T_to
+  // When from=match and to=query: computed_rel = T_m^{-1} * T_q
+  //   measured should = T_m^{-1} * T_q
+  // T_q_m.inverse() = T_m^{-1} * T_q → correct!
+  SE3 rel_loop = best_loop_pose.inverse();
+  Mat6 info = PoseGraph::DefaultInformation(50.0, 50.0);
+
   pose_graph_->AddEdge(best_kf_id, current_kf_id, rel_loop, info);
-  
-  // DEBUG: Print address after adding edge
-  std::cout << "[DEBUG] Front-end PoseGraph Addr: " << pose_graph_.get() 
-            << " | Edges AFTER: " << pose_graph_->NumEdges() << std::endl;
+
+  // Add loop edge to topological graph (weak weight)
+  topo_graph_->AddEdge(best_kf_id, current_kf_id, rel_loop, 0.2, true);
+
+  // Notify pose interpolator to start smooth transition
+  pose_interpolator_->NotifyLoopClosure();
 
   num_loops_detected_++;
-  SE3 drift = current_pose_.inverse() * best_loop_pose;
-  double drift_dist = drift.trans.norm();
-  AngleAxis drift_aa(drift.rot);
-  double drift_deg = drift_aa.angle() * 180.0 / M_PI;
-  
-  std::cout << "\n  [LOOP_CLOSED] KF" << best_kf_id << "→KF" << current_kf_id
-            << " drift=" << (drift_dist*100) << "cm " << drift_deg << "deg\n";
+
   return true;
 }
 

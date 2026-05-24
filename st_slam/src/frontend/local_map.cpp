@@ -71,11 +71,6 @@ int LocalMap::AddMapPoint(const Vec3& position, const cv::Mat& descriptor,
   mp.reprojection_error_avg = 0;
   mp.age = 0;
   map_points_[id] = mp;
-
-  auto it = keyframes_.find(keyframe_id);
-  if (it != keyframes_.end()) {
-    it->second.map_points.push_back(id);
-  }
   return id;
 }
 
@@ -84,15 +79,13 @@ void LocalMap::AssociateKeyFrameWithMap(int keyframe_id,
   auto kf_it = keyframes_.find(keyframe_id);
   if (kf_it == keyframes_.end()) return;
 
+  kf_it->second.map_points = map_point_ids;
+
   for (int mp_id : map_point_ids) {
+    if (mp_id < 0) continue;
     auto mp_it = map_points_.find(mp_id);
     if (mp_it == map_points_.end()) continue;
 
-    if (std::find(kf_it->second.map_points.begin(),
-                   kf_it->second.map_points.end(), mp_id) ==
-        kf_it->second.map_points.end()) {
-      kf_it->second.map_points.push_back(mp_id);
-    }
     if (std::find(mp_it->second.observations.begin(),
                    mp_it->second.observations.end(), keyframe_id) ==
         mp_it->second.observations.end()) {
@@ -139,6 +132,7 @@ std::vector<MapPoint> LocalMap::GetLocalMapPoints(int current_kf_id) const {
     auto kf_it = keyframes_.find(kf_id);
     if (kf_it == keyframes_.end()) continue;
     for (int mp_id : kf_it->second.map_points) {
+      if (mp_id < 0) continue;
       if (std::find(local_mp_ids.begin(), local_mp_ids.end(), mp_id) ==
           local_mp_ids.end()) {
         local_mp_ids.push_back(mp_id);
@@ -226,9 +220,9 @@ void LocalMap::CullBadMapPoints(double max_reproj_error,
 
   for (int mp_id : to_remove) {
     for (auto& [kf_id, kf] : keyframes_) {
-      kf.map_points.erase(
-        std::remove(kf.map_points.begin(), kf.map_points.end(), mp_id),
-        kf.map_points.end());
+      for (auto& mid : kf.map_points) {
+        if (mid == mp_id) mid = -1;
+      }
     }
     map_points_.erase(mp_id);
   }
@@ -385,6 +379,110 @@ void LocalMap::BuildLocalBAProblem(ceres::Problem& problem,
       problem.SetParameterBlockConstant(kf_rot_ptr[anchor_id]);
       problem.SetParameterBlockConstant(kf_trans_ptr[anchor_id]);
     }
+  }
+}
+
+// Lightweight pose-only cost function: fixed 3D point, only optimizes pose
+struct PoseOnlyReprojectionError {
+  PoseOnlyReprojectionError(const Vec3& world_pt, double u, double v,
+                             double fx, double fy, double cx, double cy)
+    : world_pt_(world_pt), u_(u), v_(v), fx_(fx), fy_(fy), cx_(cx), cy_(cy) {}
+  template <typename T>
+  bool operator()(const T* const pose, T* residuals) const {
+    T p[3] = {T(world_pt_(0)), T(world_pt_(1)), T(world_pt_(2))};
+    T cam[3];
+    ceres::QuaternionRotatePoint(pose, p, cam);
+    cam[0] += pose[4]; cam[1] += pose[5]; cam[2] += pose[6];
+    T u_pred = fx_ * cam[0] / cam[2] + cx_;
+    T v_pred = fy_ * cam[1] / cam[2] + cy_;
+    residuals[0] = u_pred - T(u_);
+    residuals[1] = v_pred - T(v_);
+    return true;
+  }
+  static ceres::CostFunction* Create(const Vec3& world_pt, double u, double v,
+                                      double fx, double fy, double cx, double cy) {
+    return new ceres::AutoDiffCostFunction<PoseOnlyReprojectionError, 2, 7>(
+      new PoseOnlyReprojectionError(world_pt, u, v, fx, fy, cx, cy));
+  }
+private:
+  Vec3 world_pt_;
+  double u_, v_, fx_, fy_, cx_, cy_;
+};
+
+void LocalMap::RunPoseOnlyLoopBA(int match_kf_id, int query_kf_id) {
+  // Only 3 KFs: match, query, query-1
+  std::vector<int> kf_ids = {match_kf_id, query_kf_id - 1, query_kf_id};
+  kf_map_.clear();
+
+  double fx = 525.0, fy = 525.0, cx = 319.5, cy = 239.5;
+  double cauchy_c = 1.345;
+
+  // Setup pose parameters for the 3 KFs
+  std::vector<int> valid_ids;
+  for (int id : kf_ids) {
+    if (keyframes_.find(id) != keyframes_.end()) {
+      KeyFrame& kf = keyframes_[id];
+      std::array<double, 7>& param = kf_map_[id];
+      param[0] = kf.pose.rot.w();
+      param[1] = kf.pose.rot.x();
+      param[2] = kf.pose.rot.y();
+      param[3] = kf.pose.rot.z();
+      param[4] = kf.pose.trans(0);
+      param[5] = kf.pose.trans(1);
+      param[6] = kf.pose.trans(2);
+      valid_ids.push_back(id);
+    }
+  }
+
+  if ((int)valid_ids.size() < 2) return;
+
+  ceres::Problem problem;
+  std::unordered_map<int, double*> kf_pose_ptr;
+  for (int id : valid_ids) {
+    kf_pose_ptr[id] = kf_map_[id].data();
+    problem.AddParameterBlock(kf_pose_ptr[id], 7);
+  }
+
+  ceres::LossFunction* loss = new ceres::CauchyLoss(cauchy_c);
+
+  int residual_count = 0;
+  for (int id : valid_ids) {
+    KeyFrame& kf = keyframes_[id];
+    for (size_t kp_idx = 0; kp_idx < kf.map_points.size(); ++kp_idx) {
+      int mp_id = kf.map_points[kp_idx];
+      if (mp_id < 0) continue;
+      auto mp_it = map_points_.find(mp_id);
+      if (mp_it == map_points_.end()) continue;
+      if (kp_idx >= kf.keypoints.size()) continue;
+      const auto& kp = kf.keypoints[kp_idx];
+      auto* cost = PoseOnlyReprojectionError::Create(
+        mp_it->second.position, kp.pt.x, kp.pt.y, fx, fy, cx, cy);
+      problem.AddResidualBlock(cost, loss, kf_map_[id].data());
+      residual_count++;
+    }
+  }
+
+  if (residual_count < 10) return;
+
+  // Fix match_kf to ground, only optimize query KFs
+  problem.SetParameterBlockConstant(kf_map_[match_kf_id].data());
+
+  ceres::Solver::Options options;
+  options.linear_solver_type = ceres::DENSE_SCHUR;
+  options.max_num_iterations = 5;
+  options.function_tolerance = 1e-6;
+  options.minimizer_progress_to_stdout = false;
+
+  ceres::Solver::Summary summary;
+  ceres::Solve(options, &problem, &summary);
+
+  // Write back only the optimized query KF poses (match_kf was fixed)
+  for (int id : valid_ids) {
+    if (id == match_kf_id) continue;
+    auto& param = kf_map_[id];
+    keyframes_[id].pose = SE3(
+      Quat(param[0], param[1], param[2], param[3]).normalized(),
+      Vec3(param[4], param[5], param[6]));
   }
 }
 

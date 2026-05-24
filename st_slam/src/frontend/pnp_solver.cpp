@@ -34,8 +34,10 @@ PnPResult PnPSolver::EstimatePose(
     if (ref_idx >= (int)ref_frame.keypoints_3d.size() ||
         cur_idx >= (int)cur_frame.keypoints.size()) continue;
 
-    Vec3 world_pt = ref_frame.keypoints_3d[ref_idx];
-    if (world_pt.norm() < 1e-6) continue;
+    Vec3 cam_pt = ref_frame.keypoints_3d[ref_idx];
+    if (cam_pt.norm() < 1e-6) continue;
+
+    Vec3 world_pt = ref_frame.pose * cam_pt;
 
     correspondences.push_back({
       world_pt,
@@ -164,7 +166,7 @@ PnPResult PnPSolver::EstimatePoseFromLandmarks(
   double sum_err = 0;
   int valid_count = 0;
   for (const auto& m : chirality_corrs) {
-    Vec3 proj = result.pose * m.world_pt;
+    Vec3 proj = result.pose.inverse() * m.world_pt;
     if (proj(2) < 0.01) continue;
     double u = fx_ * proj(0) / proj(2) + cx_;
     double v = fy_ * proj(1) / proj(2) + cy_;
@@ -181,7 +183,7 @@ PnPResult PnPSolver::EstimatePoseFromLandmarks(
     refine_wp.reserve(chirality_corrs.size());
     refine_ip.reserve(chirality_corrs.size());
     for (const auto& m : chirality_corrs) {
-      Vec3 proj = result.pose * m.world_pt;
+      Vec3 proj = result.pose.inverse() * m.world_pt;
       if (proj(2) > 0.01) {
         refine_wp.emplace_back(m.world_pt(0), m.world_pt(1), m.world_pt(2));
         refine_ip.push_back(m.img_pt);
@@ -223,7 +225,7 @@ bool PnPSolver::RefinePoseWithInliers(
   img_pts.reserve(inlier_correspondences.size());
 
   for (const auto& m : inlier_correspondences) {
-    Vec3 proj = pose * m.world_pt;
+    Vec3 proj = pose.inverse() * m.world_pt;
     if (proj(2) > 0.01) {
       world_pts.emplace_back(m.world_pt(0), m.world_pt(1), m.world_pt(2));
       img_pts.push_back(m.img_pt);
