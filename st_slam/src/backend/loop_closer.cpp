@@ -127,8 +127,6 @@ int LoopCloser::AddKeyFrame(int kf_id, const cv::Mat& descriptors) {
   }
   kf_id_map_[entry_id] = kf_id;
   descriptors_cache_[entry_id] = descriptors.clone();
-  std::cout << "[LoopCloser DEBUG] Added KF" << kf_id << " as entry " << entry_id
-            << " (total " << kf_id_map_.size() << " entries)" << std::endl;
   return (int)entry_id;
 #else
   (void)kf_id;
@@ -143,7 +141,6 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
   std::vector<LoopCandidate> candidates;
 #ifdef HAS_DBOW3
   if (!db_ || !vocab_) {
-    std::cout << "[LoopCloser DEBUG] db or vocab not initialized\n";
     return candidates;
   }
 
@@ -155,22 +152,18 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
     if (kf_id_map_[i] == current_kf_id) { current_entry = (int)i; break; }
   }
   if (current_entry < 0) {
-    std::cout << "[LoopCloser DEBUG] current_kf_id " << current_kf_id << " not found in kf_id_map_\n";
     return candidates;
   }
   if (current_entry >= (int)descriptors_cache_.size()) {
-    std::cout << "[LoopCloser DEBUG] descriptors_cache_ size " << descriptors_cache_.size() << " < current_entry " << current_entry << "\n";
     return candidates;
   }
   if (descriptors_cache_[current_entry].empty()) {
-    std::cout << "[LoopCloser DEBUG] descriptors_cache_[" << current_entry << "] is empty\n";
     return candidates;
   }
 
   // Calculate current BoW vector
   DBoW3::BowVector bow_vec_current;
   v->transform(descriptors_cache_[current_entry], bow_vec_current);
-  std::cout << "[LoopCloser DEBUG] Current BoW vector has " << bow_vec_current.size() << " words\n";
   
   // Calculate similarity score against ALL previous keyframes (manually)!
   std::vector<std::pair<double, DBoW3::EntryId>> scores_and_ids;
@@ -192,8 +185,6 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
   // Sort by score descending
   std::sort(scores_and_ids.begin(), scores_and_ids.end());
   
-  std::cout << "[LoopCloser DEBUG] Found " << scores_and_ids.size() << " total candidates\n";
-  
   int added = 0;
   for (const auto& pair : scores_and_ids) {
     if (added >= max_candidates) break;
@@ -202,22 +193,20 @@ std::vector<LoopCandidate> LoopCloser::DetectCandidates(int current_kf_id,
     
     int match_id = ((int)e_id < (int)kf_id_map_.size()) ? kf_id_map_[e_id] : -1;
     if (match_id < 0) continue;
-    if (std::abs(match_id - current_kf_id) < 4) continue; // reduced from 8
+    if (std::abs(match_id - current_kf_id) < 4) continue;
     
-    // Note: min_score is IGNORED! We let geometric verification catch false positives!
     LoopCandidate cand;
     cand.query_id = current_kf_id;
     cand.match_id = match_id;
     cand.similarity_score = score;
     candidates.push_back(cand);
-    std::cout << "[LoopCloser DEBUG] Adding candidate KF" << match_id 
-              << " (entry " << e_id << ") score=" << score << "\n";
     added++;
   }
 #else
   (void)current_kf_id; (void)min_score; (void)max_candidates;
 #endif
-  std::cout << "[LoopCloser DEBUG] Total " << candidates.size() << " loop candidates\n";
+  
+  std::cout << "[DEBUG] Candidates: " << candidates.size() << "\n";
   return candidates;
 }
 
@@ -227,14 +216,12 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
                                          SE3& relative_pose) {
   // First check if we have access to the local map
   if (!local_map_) {
-    std::cout << "[LoopCloser DEBUG] No local_map available for geometric verification\n";
     return false;
   }
 
   // Get the keyframe data from local_map (this has the map point IDs!)
   const KeyFrame* match_kf = local_map_->GetKeyFrame(match_kf_id);
   if (!match_kf) {
-    std::cout << "[LoopCloser DEBUG] Match keyframe " << match_kf_id << " not found in local_map\n";
     return false;
   }
 
@@ -250,7 +237,6 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
       good_matches.push_back(knn[i][0]);
     }
   }
-  std::cout << "[LoopCloser DEBUG] Geometric verification: " << good_matches.size() << " good matches\n";
   if (good_matches.size() < 15) return false;
 
   // Build 2D-3D correspondences!
@@ -311,7 +297,6 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
       SE3 T_q = q_kf->pose;
       SE3 T_m = match_kf->pose;
       relative_pose = T_m.inverse() * T_q;
-      std::cout << "[LoopCloser DEBUG] Using pose graph as geometric verification (3D points: " << num_3d_points_found << ")\n";
       return true;  // Just trust the pose graph if we have BoW match!
     }
   }
@@ -319,9 +304,6 @@ bool LoopCloser::GeometricVerification(int query_kf_id, int match_kf_id,
   // Fallback: if we have map points, try PnP
   PnPResult result = pnp_solver_->EstimatePose(
     pnp_matches, temp_frame, query_frame, SE3::Identity());
-
-  std::cout << "[LoopCloser DEBUG] PnP result: success=" << result.success
-            << " inlier_ratio=" << result.inlier_ratio << "\n";
 
   if (result.success && result.inlier_ratio > 0.15) {
     relative_pose = result.pose;

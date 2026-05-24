@@ -302,8 +302,7 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
             << "s (" << std::setprecision(2) << total_wall_time_s / total << "s/frame)\n";
 
   // Post-hoc global PGO: optimize all keyframes' poses
-  std::cout << "\n  [PGO] Running global pose graph optimization on "
-            << tracking.GetLocalMap().NumKeyFrames() << " keyframes...\n";
+  std::cout << "\n  [PGO] Running global pose graph optimization...\n";
   PoseGraph final_pgo(100.0, 1000.0);
   final_pgo.BuildFromKeyframes(tracking.GetLocalMap().GetAllKeyframes());
   std::cout << "  [PGO] Built " << final_pgo.NumEdges() << " edges\n";
