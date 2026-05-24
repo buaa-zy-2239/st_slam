@@ -56,3 +56,16 @@ target_link_libraries(test_pose_graph_debug
 )
 
 add_test(NAME PoseGraphDebugTest COMMAND test_pose_graph_debug)
+
+add_executable(test_loop_edge_preserve
+  test_loop_edge_preserve.cpp
+)
+
+target_link_libraries(test_loop_edge_preserve
+  ${ST_SLAM_ROOT}/build/libst_slam.so
+  ${OpenCV_LIBS}
+  ${CERES_LIBRARIES}
+  Threads::Threads
+)
+
+add_test(NAME LoopEdgePreserveTest COMMAND test_loop_edge_preserve)
