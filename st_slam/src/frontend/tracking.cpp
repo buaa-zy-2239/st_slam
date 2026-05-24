@@ -628,7 +628,9 @@ bool Tracking::DetectLoopCorrection() {
   if (best_kf_id < 0) return false;
 
   // Add loop constraint to pose graph
-  SE3 rel_loop = current_pose_.inverse() * best_loop_pose;
+  // rel_loop = past_kf_pose.inverse() * current_kf_pose
+  // This matches BuildFromKeyframes: from_pose.inverse() * to_pose
+  SE3 rel_loop = best_loop_pose.inverse() * current_pose_;
   Mat6 info = PoseGraph::DefaultInformation(50.0, 500.0);
   
   // DEBUG: Print address before adding edge
