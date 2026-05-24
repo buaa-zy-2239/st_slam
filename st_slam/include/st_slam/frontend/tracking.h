@@ -20,6 +20,11 @@ namespace st_slam {
 class Tracking {
 public:
   explicit Tracking(const STSLAMConfig& config);
+  
+  bool InitializeForTesting(const Frame& frame) { return Initialize(frame); }
+
+  // Friend declaration for testing
+  friend class TrackingTest;
 
   TrackingReport TrackFrame(Frame& frame);
 

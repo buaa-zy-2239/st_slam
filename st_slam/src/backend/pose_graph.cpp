@@ -142,7 +142,7 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
               << kf.pose.trans(0) << ", " << kf.pose.trans(1) << ", " << kf.pose.trans(2) << ")\n";
   }
 
-  return summary.termination_type != ceres::NO_CONVERGENCE;
+  return summary.termination_type != ceres::FAILURE;
 }
 
 } // namespace st_slam

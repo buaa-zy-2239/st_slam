@@ -21,6 +21,8 @@
 #else
 // Stub implementation when DBoW3 is not available
 namespace DBoW3 {
+  struct BowVector : public std::map<unsigned int, double> {
+  };
   struct QueryResult {
     unsigned int Id;
     double Score;
@@ -35,6 +37,7 @@ namespace DBoW3 {
     void save(const std::string&) const {}
     int size() const { return 0; }
     void transform(const cv::Mat&, BowVector&) const {}
+    double score(const BowVector&, const BowVector&) const { return 0.0; }
   };
   using EntryId = unsigned int;
   class Database {
@@ -44,6 +47,7 @@ namespace DBoW3 {
     void setVocabulary(const Vocabulary&) {}
     EntryId add(const cv::Mat&) { return 0; }
     void query(const cv::Mat&, QueryResults&, int, int) const {}
+    void query(const BowVector&, QueryResults&, int, int) const {}
     void query(EntryId, QueryResults&, int) const {}
   };
 }
