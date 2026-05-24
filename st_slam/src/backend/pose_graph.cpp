@@ -62,6 +62,10 @@ bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {
   std::sort(kf_ids.begin(), kf_ids.end());
   if (kf_ids.empty()) return false;
 
+  // DEBUG: Print address and edge count
+  std::cout << "[ADDR DEBUG] Back-end PoseGraph Addr: " << this 
+            << " | Total edges BEFORE: " << edges_.size() << std::endl;
+
   std::cout << "[PGO] Running global pose graph optimization on " << kf_ids.size() << " keyframes...\n";
 
   int odometry_edges = 0;
