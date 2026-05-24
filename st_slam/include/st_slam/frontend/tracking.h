@@ -42,6 +42,8 @@ public:
   LocalMap& GetLocalMap() { return *local_map_; }
   
   int GetNumLoopsDetected() const { return num_loops_detected_; }
+  
+  PoseGraph* GetPoseGraph() { return pose_graph_.get(); }
 
 private:
   STSLAMConfig config_;

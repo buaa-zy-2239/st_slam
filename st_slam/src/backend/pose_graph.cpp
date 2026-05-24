@@ -31,7 +31,21 @@ Mat6 PoseGraph::DefaultInformation(double rot_w, double trans_w) {
 }
 
 void PoseGraph::BuildFromKeyframes(const std::unordered_map<int, KeyFrame>& keyframes) {
-  edges_.clear();
+  // DON'T clear edges_! We want to preserve loop edges!
+  // Only rebuild odometry edges between consecutive keyframes
+  // while keeping any loop edges that were added by LoopCloser
+  
+  // First, remove ONLY odometry edges (consecutive keyframes)
+  int initial_size = edges_.size();
+  auto it = edges_.begin();
+  while (it != edges_.end()) {
+    int diff = std::abs(it->to_id - it->from_id);
+    if (diff == 1) {
+      it = edges_.erase(it);
+    } else {
+      ++it;
+    }
+  }
 
   std::vector<int> kf_ids;
   for (const auto& [id, _] : keyframes) kf_ids.push_back(id);
@@ -49,6 +63,9 @@ void PoseGraph::BuildFromKeyframes(const std::unordered_map<int, KeyFrame>& keyf
     Mat6 info = DefaultInformation(rot_info_weight_, trans_info_weight_);
     AddEdge(from_id, to_id, rel, info);
   }
+  
+  std::cout << "[DEBUG] BuildFromKeyframes: kept " << (edges_.size() - (kf_ids.size()-1)) 
+            << " loop edges\n";
 }
 
 bool PoseGraph::Optimize(std::unordered_map<int, KeyFrame>& keyframes) {

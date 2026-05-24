@@ -303,13 +303,17 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
 
   // Post-hoc global PGO: optimize all keyframes' poses
   std::cout << "\n  [PGO] Running global pose graph optimization...\n";
-  PoseGraph final_pgo(100.0, 1000.0);
-  final_pgo.BuildFromKeyframes(tracking.GetLocalMap().GetAllKeyframes());
-  std::cout << "  [PGO] Built " << final_pgo.NumEdges() << " edges\n";
-  bool pgo_ok = final_pgo.Optimize(tracking.GetLocalMap().GetAllKeyframes());
-   if (pgo_ok) {
-     std::cout << "  [PGO] SUCCESS\n";
-   }
+  PoseGraph* pose_graph = tracking.GetPoseGraph();
+  if (pose_graph) {
+    pose_graph->BuildFromKeyframes(tracking.GetLocalMap().GetAllKeyframes());
+    std::cout << "  [PGO] Built " << pose_graph->NumEdges() << " edges\n";
+    bool pgo_ok = pose_graph->Optimize(tracking.GetLocalMap().GetAllKeyframes());
+    if (pgo_ok) {
+      std::cout << "  [PGO] SUCCESS\n";
+    }
+  } else {
+    std::cout << "  [PGO] ERROR: PoseGraph is null\n";
+  }
 
   // Recompute estimated_poses from optimized keyframes
   // For frames between KFs, apply interpolation of the correction
