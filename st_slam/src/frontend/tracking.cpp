@@ -624,9 +624,11 @@ bool Tracking::DetectLoopCorrection() {
   if (best_kf_id < 0) return false;
 
   // Add loop constraint to pose graph
-  // rel_loop = past_kf_pose.inverse() * current_kf_pose
-  // This matches BuildFromKeyframes: from_pose.inverse() * to_pose
-  SE3 rel_loop = best_loop_pose.inverse() * current_pose_;
+  // relative_pose from GeometricVerification is T_match.inverse() * T_query (from match to query)
+  // So rel_loop = best_loop_pose directly (not inverse!)
+  // This matches Ceres convention: T_rel = T_from.inverse() * T_to
+  // where from=match_kf, to=query_kf, T_rel=T_match_query
+  SE3 rel_loop = best_loop_pose;
   Mat6 info = PoseGraph::DefaultInformation(50.0, 500.0);
   
   // DEBUG: Print address before adding edge
