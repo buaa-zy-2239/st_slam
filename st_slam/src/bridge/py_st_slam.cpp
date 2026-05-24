@@ -58,6 +58,7 @@ public:
     switch (state) {
       case TrackingState::INITIALIZING: return "INITIALIZING";
       case TrackingState::TRACKING_GOOD: return "TRACKING_GOOD";
+      case TrackingState::TRACKING_DEGRADED: return "TRACKING_DEGRADED";
       case TrackingState::TRACKING_LOST: return "TRACKING_LOST";
       case TrackingState::TRACKING_DEGENERATE_C: return "DEGENERATE";
       default: return "UNKNOWN";
@@ -69,9 +70,47 @@ public:
   int get_num_mps() const { return tracking_->GetLocalMap().NumMapPoints(); }
   double get_success_rate() const { return tracking_->GetLastFrame().id > 0 ? 1.0 : 0.0; }
 
+  // Semantic topology interface
+  void attach_label(int node_id, const std::string& label,
+                    float confidence, int class_id = -1) {
+    tracking_->GetTopoGraph().AttachSemanticLabel(node_id, label, confidence, class_id);
+  }
+
+  std::vector<std::tuple<std::string, float, int>> get_labels(int node_id) const {
+    auto labels = tracking_->GetTopoGraph().GetSemanticLabels(node_id);
+    std::vector<std::tuple<std::string, float, int>> result;
+    for (const auto& sl : labels)
+      result.emplace_back(sl.label, sl.confidence, sl.class_id);
+    return result;
+  }
+
+  std::vector<int> find_nodes_by_label(const std::string& label,
+                                        float min_confidence = 0.0) const {
+    return tracking_->GetTopoGraph().GetNodesByLabel(label, min_confidence);
+  }
+
+  int get_num_topo_nodes() const { return tracking_->GetTopoGraph().NumNodes(); }
+  int get_num_topo_edges() const { return tracking_->GetTopoGraph().NumEdges(); }
+
+  std::vector<double> get_topo_node_pose(int node_id) const {
+    const auto* node = tracking_->GetTopoGraph().GetNode(node_id);
+    if (!node) return {};
+    const SE3& p = node->pose;
+    return {p.trans(0), p.trans(1), p.trans(2),
+            p.rot.x(), p.rot.y(), p.rot.z(), p.rot.w()};
+  }
+
+  std::vector<int> get_topo_node_neighbors(int node_id) const {
+    return tracking_->GetTopoGraph().GetNeighbors(node_id);
+  }
+
+  int get_current_topo_node() const { return current_topo_node_; }
+  void set_current_topo_node(int node_id) { current_topo_node_ = node_id; }
+
 private:
   std::unique_ptr<Tracking> tracking_;
   int frame_count_;
+  int current_topo_node_ = 0;
 };
 
 } // namespace st_slam
@@ -91,5 +130,21 @@ PYBIND11_MODULE(st_slam_tracker, m) {
     .def("get_state", &st_slam::HabitatTracker::get_state)
     .def("get_num_loops", &st_slam::HabitatTracker::get_num_loops)
     .def("get_num_kfs", &st_slam::HabitatTracker::get_num_kfs)
-    .def("get_num_mps", &st_slam::HabitatTracker::get_num_mps);
+    .def("get_num_mps", &st_slam::HabitatTracker::get_num_mps)
+    .def("attach_label", &st_slam::HabitatTracker::attach_label,
+         py::arg("node_id"), py::arg("label"),
+         py::arg("confidence"), py::arg("class_id") = -1)
+    .def("get_labels", &st_slam::HabitatTracker::get_labels,
+         py::arg("node_id"))
+    .def("find_nodes_by_label", &st_slam::HabitatTracker::find_nodes_by_label,
+         py::arg("label"), py::arg("min_confidence") = 0.0)
+    .def("get_num_topo_nodes", &st_slam::HabitatTracker::get_num_topo_nodes)
+    .def("get_num_topo_edges", &st_slam::HabitatTracker::get_num_topo_edges)
+    .def("get_topo_node_pose", &st_slam::HabitatTracker::get_topo_node_pose,
+         py::arg("node_id"))
+    .def("get_topo_node_neighbors", &st_slam::HabitatTracker::get_topo_node_neighbors,
+         py::arg("node_id"))
+    .def("get_current_topo_node", &st_slam::HabitatTracker::get_current_topo_node)
+    .def("set_current_topo_node", &st_slam::HabitatTracker::set_current_topo_node,
+         py::arg("node_id"));
 }
