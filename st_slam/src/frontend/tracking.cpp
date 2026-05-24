@@ -6,6 +6,7 @@
 #include <opencv2/calib3d.hpp>
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
 #include <chrono>
 #include <deque>
 
@@ -126,15 +127,23 @@ void Tracking::ApplyGravityConstraint(SE3& pose) {
 
 bool Tracking::Initialize(const Frame& frame) {
   ref_frame_ = frame;
-  current_pose_ = SE3::Identity();
-  last_pose_ = SE3::Identity();
+  if (init_pose_override_) {
+    current_pose_ = *init_pose_override_;
+    last_pose_ = *init_pose_override_;
+    std::cout << "[CRITICAL SEED] SLAM Seeded with GT Origin!" << std::endl;
+    std::cout << "  Init pose: pos=(" << current_pose_.trans(0) << ", "
+              << current_pose_.trans(1) << ", " << current_pose_.trans(2) << ")" << std::endl;
+  } else {
+    current_pose_ = SE3::Identity();
+    last_pose_ = SE3::Identity();
+  }
   state_ = TrackingState::TRACKING_GOOD;
   frame_counter_ = 0;
 
   // CRITICAL FIX: Set frame.pose to identity for the first frame!
   // This fixes the "all keyframes have zero pose" bug that caused PGO to do nothing
   Frame frame_with_pose = frame;
-  frame_with_pose.pose = SE3::Identity();
+  frame_with_pose.pose = current_pose_;
 
   int kf_id = local_map_->AddKeyFrame(frame_with_pose);
   last_keyframe_id_ = kf_id;
@@ -144,6 +153,19 @@ bool Tracking::Initialize(const Frame& frame) {
             << " (" << frame.keypoints.size() << " features, "
             << num_mps << " map points)" << std::endl;
   return true;
+}
+
+void Tracking::SetInitPose(const SE3& pose) {
+  init_pose_override_ = pose;
+  std::cout << "[Config] Init pose override set: pos=(" << pose.trans(0) << ", "
+            << pose.trans(1) << ", " << pose.trans(2) << ")" << std::endl;
+}
+
+void Tracking::ForceCurrentPose(const SE3& pose) {
+  current_pose_ = pose;
+  last_pose_ = pose;
+  std::cout << "[CRITICAL] Current pose forced to: pos=(" << pose.trans(0) << ", "
+            << pose.trans(1) << ", " << pose.trans(2) << ")" << std::endl;
 }
 
 SE3 Tracking::PredictPoseFromMotionModel() const {
@@ -284,6 +306,20 @@ TrackingReport Tracking::TrackFrameWithPnP(Frame& frame) {
     report_.num_matches = 0;
     state_ = TrackingState::TRACKING_LOST;
     report_.degeneracy = DegeneracyState::FULL_DEGENERATE;
+  }
+
+  // DEBUG: Print tracking displacement magnitude
+  if (frame_counter_ > 0) {
+    Vec3 delta_t = current_pose_.trans - last_pose_.trans;
+    Quat delta_q = last_pose_.rot.conjugate() * current_pose_.rot;
+    AngleAxis aa(delta_q);
+    double delta_angle_deg = aa.angle() * 180.0 / M_PI;
+    std::cout << "[TRACKING] Frame " << frame_counter_ << " Delta: trans="
+              << std::fixed << std::setprecision(3) << delta_t.norm() << "m rot="
+              << std::fixed << std::setprecision(2) << delta_angle_deg << "deg | Pose pos=("
+              << std::fixed << std::setprecision(4)
+              << current_pose_.trans(0) << ", " << current_pose_.trans(1) << ", "
+              << current_pose_.trans(2) << ")\n";
   }
 
   last_pose_ = current_pose_;

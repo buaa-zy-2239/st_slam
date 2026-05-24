@@ -83,13 +83,24 @@ PnPResult PnPSolver::EstimatePoseFromLandmarks(
 
   cv::Mat rvec, tvec, inliers_cv;
 
+  SE3 initial_tcw = initial_guess.inverse();
+  AngleAxis aa_init(initial_tcw.rot);
+  rvec = (cv::Mat_<double>(3,1) << aa_init.axis()(0) * aa_init.angle(),
+                                       aa_init.axis()(1) * aa_init.angle(),
+                                       aa_init.axis()(2) * aa_init.angle());
+  tvec = (cv::Mat_<double>(3,1) << initial_tcw.trans(0),
+                                       initial_tcw.trans(1),
+                                       initial_tcw.trans(2));
+
   bool ok = cv::solvePnPRansac(
     world_pts, img_pts, camera_matrix_, cv::Mat(),
-    rvec, tvec, false, max_iterations_,
+    rvec, tvec, true, max_iterations_,
     reproj_threshold_, 0.99, inliers_cv,
-    cv::SOLVEPNP_EPNP);
+    cv::SOLVEPNP_ITERATIVE);
 
   if (!ok || inliers_cv.rows < min_inliers_) {
+    rvec = cv::Mat::zeros(3, 1, CV_64F);
+    tvec = cv::Mat::zeros(3, 1, CV_64F);
     ok = cv::solvePnPRansac(
       world_pts, img_pts, camera_matrix_, cv::Mat(),
       rvec, tvec, false, max_iterations_ * 2,

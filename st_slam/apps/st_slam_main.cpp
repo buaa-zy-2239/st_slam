@@ -241,7 +241,9 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
     "../data/ORBvoc.txt",
     "../../data/ORBvoc.txt",
     "/content/st_slam/data/ORBvoc.txt",
-    "/content/st_slam/st_slam/data/ORBvoc.txt"
+    "/content/st_slam/st_slam/data/ORBvoc.txt",
+    "/home/zhang/ORB_SLAM_Learning/ORBvoc.txt",
+    "../../../ORBvoc.txt"
   };
   for (const auto& vocab : vocab_candidates) {
     std::ifstream test(vocab);
@@ -256,6 +258,13 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
   }
 
   Tracking tracking(config);
+
+  // CRITICAL EXPERIMENT: Seed with GT origin to test scale/alignment
+  SE3 gt_init = reader.GetGroundTruth(reader.GetTimestamps()[0]);
+  std::cout << "\n[CRITICAL SEED EXPERIMENT]" << std::endl;
+  std::cout << "  GT first frame: pos=(" << gt_init.trans(0) << ", "
+            << gt_init.trans(1) << ", " << gt_init.trans(2) << ")" << std::endl;
+  tracking.SetInitPose(gt_init);
 
   std::vector<SE3> estimated_poses;
   std::vector<double> frame_timestamps;
@@ -355,7 +364,7 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
 
   std::ofstream pose_file("estimated_poses.txt");
   if (pose_file.is_open()) {
-    pose_file << "# ST-SLAM 4.0 trajectory: " << seq_display << "\n";
+    pose_file << "# ST-SLAM 4.0 trajectory (Tcw): " << seq_display << "\n";
     pose_file << "# timestamp tx ty tz qx qy qz qw\n";
     for (size_t i = 0; i < estimated_poses.size(); ++i) {
       const SE3& pose = estimated_poses[i];
@@ -365,7 +374,26 @@ int RunSingleSequence(const std::string& dataset_path, int max_frames,
                 << pose.rot.x() << " " << pose.rot.y() << " " << pose.rot.z() << " " << pose.rot.w()
                 << "\n";
     }
-    std::cout << "  -> estimated_poses.txt\n";
+    std::cout << "  -> estimated_poses.txt (Tcw)\n";
+  }
+
+  // TEST: Also export as Twc (camera pose in world frame)
+  {
+    std::ofstream twc_file("estimated_poses_twc.txt");
+    if (twc_file.is_open()) {
+      twc_file << "# ST-SLAM 4.0 trajectory (Twc - camera in world): " << seq_display << "\n";
+      twc_file << "# timestamp tx ty tz qx qy qz qw\n";
+      for (size_t i = 0; i < estimated_poses.size(); ++i) {
+        const SE3& pose = estimated_poses[i];
+        SE3 Twc = pose.inverse();  // Convert Tcw to Twc
+        twc_file << std::fixed << std::setprecision(6)
+                  << frame_timestamps[i] << " "
+                  << Twc.trans(0) << " " << Twc.trans(1) << " " << Twc.trans(2) << " "
+                  << Twc.rot.x() << " " << Twc.rot.y() << " " << Twc.rot.z() << " " << Twc.rot.w()
+                  << "\n";
+      }
+      std::cout << "  -> estimated_poses_twc.txt (Twc - TEST)\n";
+    }
   }
 
   {

@@ -1,0 +1,30 @@
+ST-SLAM 4.0 Metrics Report
+==================================================
+Dataset: /home/zhang/ORB_SLAM_Learning/datasets/tum/rgbd_dataset_freiburg1_xyz
+Frames: 200
+Timestamp: Sun May 24 14:29:03 CST 2026
+==================================================
+
+[ATE Metrics]
+ate_rmse_m: 0.1653
+ate_mean_m: 0.1489
+
+[RPE Metrics]
+rpe_trans_rmse_m: 0.0117
+rpe_rot_rmse_deg: 0.71
+
+[Loop Closure]
+loops_detected: 0
+loop_edges: 0
+pgo_correction_m: None
+final_error: None
+iterations: None
+
+[Statistics]
+total_frames: 200
+num_keyframes: None
+edges_built: None
+tracking_success_rate_pct: 100.0
+
+[Performance]
+wall_time_s: 3.7

@@ -14,6 +14,7 @@
 #include "st_slam/frontend/local_map.h"
 #include "st_slam/backend/loop_closer.h"
 #include <memory>
+#include <optional>
 
 namespace st_slam {
 
@@ -51,6 +52,7 @@ private:
   TrackingReport report_;
   SE3 current_pose_;
   SE3 last_pose_;
+  std::optional<SE3> init_pose_override_;
   Frame last_frame_;
   Frame ref_frame_;
   int frame_counter_;
@@ -79,6 +81,10 @@ private:
   std::deque<Vec3> accel_buffer_;
 
   bool Initialize(const Frame& frame);
+
+public:
+  void SetInitPose(const SE3& pose);
+  void ForceCurrentPose(const SE3& pose);
 
   TrackingReport TrackFrameWithPnP(Frame& frame);
 

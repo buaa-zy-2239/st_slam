@@ -70,11 +70,11 @@ private:
       T m_t[3] = {T(measured_.trans(0)), T(measured_.trans(1)),
                    T(measured_.trans(2))};
 
-      // Error: q_rel * m_q^{-1} (computed * measured^{-1})
+      // Error: m_q^{-1} * q_rel (measured^{-1} * computed)
       // This gives the deviation of computed from measured
       T m_q_inv[4] = {m_q[0], -m_q[1], -m_q[2], -m_q[3]};
       T q_error[4];
-      ceres::QuaternionProduct(q_rel, m_q_inv, q_error);
+      ceres::QuaternionProduct(m_q_inv, q_rel, q_error);
 
       T rot_res[3] = {T(2.0)*q_error[1], T(2.0)*q_error[2], T(2.0)*q_error[3]};
       T trans_res[3] = {t_rel[0]-m_t[0], t_rel[1]-m_t[1], t_rel[2]-m_t[2]};
